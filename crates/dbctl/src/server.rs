@@ -177,11 +177,32 @@ pub fn get_version_dir(version: &str) -> PathBuf {
     get_versions_dir().join(version)
 }
 
+pub fn get_installed_versions() -> Result<Vec<String>> {
+    let versions_dir = get_versions_dir();
+
+    if !versions_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut versions = Vec::new();
+    for entry in fs::read_dir(&versions_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            versions.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+
+    versions.sort();
+    versions.reverse(); // Latest first
+
+    Ok(versions)
+}
+
 pub fn get_cluster_dir(name: &str) -> PathBuf {
     get_clusters_dir().join(name)
 }
 
-async fn install_postgres(version: &str) -> Result<()> {
+pub async fn install_postgres(version: &str) -> Result<()> {
     let version_dir = get_version_dir(version);
 
     if version_dir.exists() {
@@ -468,7 +489,7 @@ fn list_installed() -> Result<()> {
     Ok(())
 }
 
-fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Result<()> {
+pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Result<()> {
     let version_dir = get_version_dir(version);
 
     if !version_dir.exists() {
@@ -556,7 +577,7 @@ fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Result<
     Ok(())
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ClusterMetadata {
     pub version: String,
     pub port: u16,
@@ -688,7 +709,7 @@ pub fn start_cluster(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn stop_cluster(name: &str) -> Result<()> {
+pub fn stop_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
     let version_dir = get_version_dir(&metadata.version);
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
@@ -714,7 +735,7 @@ fn stop_cluster(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn restart_cluster(name: &str) -> Result<()> {
+pub fn restart_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
     let version_dir = get_version_dir(&metadata.version);
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
@@ -752,7 +773,7 @@ fn restart_cluster(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn reload_cluster(name: &str) -> Result<()> {
+pub fn reload_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
     let version_dir = get_version_dir(&metadata.version);
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
@@ -838,7 +859,7 @@ fn list_clusters() -> Result<()> {
     Ok(())
 }
 
-fn remove_cluster(name: &str) -> Result<()> {
+pub fn remove_cluster(name: &str) -> Result<()> {
     let cluster_dir = get_cluster_dir(name);
 
     if !cluster_dir.exists() {
@@ -892,7 +913,7 @@ fn uninstall_postgres(version: &str) -> Result<()> {
     Ok(())
 }
 
-fn show_logs(name: &str, lines: usize, follow: bool) -> Result<()> {
+pub fn get_logs(name: &str, lines: usize) -> Result<String> {
     let metadata = load_cluster_metadata(name)?;
     let log_dir = &metadata.logs_dir;
 
@@ -913,15 +934,43 @@ fn show_logs(name: &str, lines: usize, follow: bool) -> Result<()> {
         .collect();
 
     if log_files.is_empty() {
-        println!("No log files found for cluster '{}'", name);
-        return Ok(());
+        return Ok(format!("No log files found for cluster '{}'", name));
     }
 
     log_files.sort_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
     let log_file = log_files.last().unwrap().path();
 
+    // Read last N lines
+    let content = fs::read_to_string(&log_file)?;
+    let all_lines: Vec<&str> = content.lines().collect();
+    let start = if all_lines.len() > lines {
+        all_lines.len() - lines
+    } else {
+        0
+    };
+
+    Ok(all_lines[start..].join("\n"))
+}
+
+fn show_logs(name: &str, lines: usize, follow: bool) -> Result<()> {
     if follow {
-        // Use tail -f for following
+        let metadata = load_cluster_metadata(name)?;
+        let log_dir = &metadata.logs_dir;
+
+        let mut log_files: Vec<_> = fs::read_dir(log_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s == "log")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        log_files.sort_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
+        let log_file = log_files.last().unwrap().path();
+
         let status = Command::new("tail")
             .arg("-f")
             .arg("-n")
@@ -933,20 +982,9 @@ fn show_logs(name: &str, lines: usize, follow: bool) -> Result<()> {
             bail!("tail command failed");
         }
     } else {
-        // Read last N lines
-        let content = fs::read_to_string(&log_file)?;
-        let all_lines: Vec<&str> = content.lines().collect();
-        let start = if all_lines.len() > lines {
-            all_lines.len() - lines
-        } else {
-            0
-        };
-
-        for line in &all_lines[start..] {
-            println!("{}", line);
-        }
+        let logs = get_logs(name, lines)?;
+        println!("{}", logs);
     }
-
     Ok(())
 }
 

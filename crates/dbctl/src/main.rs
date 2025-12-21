@@ -3,11 +3,8 @@ use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
-mod context;
-mod postgres;
-mod server;
-
-use context::Context;
+use dbctl::context::Context;
+use dbctl::{postgres, server};
 
 #[derive(Parser)]
 #[command(name = "dbctl")]

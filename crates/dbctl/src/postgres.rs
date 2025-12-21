@@ -206,7 +206,7 @@ pub async fn handle_action(action: DbAction) -> Result<()> {
             drop_database(&cluster, &database).await?;
         }
         DbAction::List { cluster } => {
-            list_databases(&cluster).await?;
+            print_databases(&cluster).await?;
         }
         DbAction::Shell { cluster, database } => {
             shell(&cluster, database.as_deref())?;
@@ -246,7 +246,7 @@ pub async fn handle_action(action: DbAction) -> Result<()> {
                 create_user(&cluster, &username, password.as_deref(), superuser).await?;
             }
             UserAction::List { cluster } => {
-                list_users(&cluster).await?;
+                print_users(&cluster).await?;
             }
             UserAction::Drop { cluster, username } => {
                 drop_user(&cluster, &username).await?;
@@ -283,8 +283,8 @@ pub async fn handle_action(action: DbAction) -> Result<()> {
     Ok(())
 }
 
-async fn create_database(cluster: &str, database: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub async fn create_database(cluster: &str, database: &str) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -321,8 +321,8 @@ async fn create_database(cluster: &str, database: &str) -> Result<()> {
     Ok(())
 }
 
-async fn drop_database(cluster: &str, database: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub async fn drop_database(cluster: &str, database: &str) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -356,8 +356,8 @@ async fn drop_database(cluster: &str, database: &str) -> Result<()> {
     Ok(())
 }
 
-async fn list_databases(cluster: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub async fn list_databases(cluster: &str) -> Result<Vec<String>> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -379,24 +379,28 @@ async fn list_databases(cluster: &str) -> Result<()> {
         )
         .await?;
 
-    if rows.is_empty() {
+    let databases: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+    Ok(databases)
+}
+
+async fn print_databases(cluster: &str) -> Result<()> {
+    let databases = list_databases(cluster).await?;
+    if databases.is_empty() {
         println!("No databases found in cluster '{}'", cluster);
     } else {
         println!("Databases in cluster '{}':", cluster);
-        for row in rows {
-            let datname: String = row.get(0);
-            println!("  {}", datname);
+        for db in databases {
+            println!("  {}", db);
         }
     }
-
     Ok(())
 }
 
 fn shell(cluster: &str, database: Option<&str>) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
     let dbname = database.unwrap_or("postgres");
 
-    let version_dir = super::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version);
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());
@@ -420,10 +424,40 @@ fn shell(cluster: &str, database: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn exec(cluster: &str, database: &str, file: Option<&str>, sql: Option<&str>) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub fn exec_sql(cluster: &str, database: &str, sql: &str) -> Result<String> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let version_dir = super::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let psql_path = version_dir.join("bin/psql");
+    if !psql_path.exists() {
+        bail!("psql not found at {}", psql_path.display());
+    }
+
+    let output = Command::new(&psql_path)
+        .arg("-h")
+        .arg("localhost")
+        .arg("-p")
+        .arg(metadata.port.to_string())
+        .arg("-U")
+        .arg(&metadata.username)
+        .arg("-d")
+        .arg(database)
+        .arg("-c")
+        .arg(sql)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("SQL execution failed: {}", stderr);
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn exec(cluster: &str, database: &str, file: Option<&str>, sql: Option<&str>) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+
+    let version_dir = crate::server::get_version_dir(&metadata.version);
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());
@@ -466,10 +500,10 @@ fn exec(cluster: &str, database: &str, file: Option<&str>, sql: Option<&str>) ->
     Ok(())
 }
 
-fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let version_dir = super::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version);
     let pg_dump_path = version_dir.join("bin/pg_dump");
     if !pg_dump_path.exists() {
         bail!("pg_dump not found at {}", pg_dump_path.display());
@@ -500,14 +534,14 @@ fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
     Ok(())
 }
 
-fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     if !Path::new(input).exists() {
         bail!("Input file not found: {}", input);
     }
 
-    let version_dir = super::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version);
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());
@@ -550,7 +584,7 @@ fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
 }
 
 async fn info(cluster: &str, database: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname={}",
@@ -612,13 +646,13 @@ async fn info(cluster: &str, database: &str) -> Result<()> {
     Ok(())
 }
 
-async fn create_user(
+pub async fn create_user(
     cluster: &str,
     username: &str,
     password: Option<&str>,
     superuser: bool,
 ) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -662,8 +696,8 @@ async fn create_user(
     Ok(())
 }
 
-async fn list_users(cluster: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+pub async fn list_users(cluster: &str) -> Result<Vec<UserInfo>> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -685,32 +719,42 @@ async fn list_users(cluster: &str) -> Result<()> {
         )
         .await?;
 
-    if rows.is_empty() {
+    let users: Vec<UserInfo> = rows
+        .iter()
+        .map(|row| UserInfo {
+            name: row.get(0),
+            superuser: row.get(1),
+            create_db: row.get(2),
+            create_role: row.get(3),
+        })
+        .collect();
+
+    Ok(users)
+}
+
+async fn print_users(cluster: &str) -> Result<()> {
+    let users = list_users(cluster).await?;
+    if users.is_empty() {
         println!("No users found in cluster '{}'", cluster);
     } else {
         println!("Users in cluster '{}':", cluster);
         println!("  Name               Superuser  CreateDB  CreateRole");
         println!("  ------------------ ---------- --------- ----------");
-        for row in rows {
-            let rolname: String = row.get(0);
-            let rolsuper: bool = row.get(1);
-            let rolcreatedb: bool = row.get(2);
-            let rolcreaterole: bool = row.get(3);
+        for user in users {
             println!(
                 "  {:<18} {:<10} {:<9} {}",
-                rolname,
-                if rolsuper { "yes" } else { "no" },
-                if rolcreatedb { "yes" } else { "no" },
-                if rolcreaterole { "yes" } else { "no" }
+                user.name,
+                if user.superuser { "yes" } else { "no" },
+                if user.create_db { "yes" } else { "no" },
+                if user.create_role { "yes" } else { "no" }
             );
         }
     }
-
     Ok(())
 }
 
 async fn drop_user(cluster: &str, username: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -742,7 +786,7 @@ async fn grant_privileges(
     privileges: &str,
     schema: &str,
 ) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname={}",
@@ -797,7 +841,7 @@ async fn revoke_privileges(
     privileges: &str,
     schema: &str,
 ) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname={}",
@@ -848,14 +892,97 @@ async fn revoke_privileges(
 }
 
 #[derive(Debug, Clone)]
+pub struct UserInfo {
+    pub name: String,
+    pub superuser: bool,
+    pub create_db: bool,
+    pub create_role: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ClusterStats {
     pub database_count: i64,
     pub user_count: i64,
     pub table_count: i64,
 }
 
+// ============================================
+// Table Browser Structures
+// ============================================
+
+/// Information about a database schema
+#[derive(Debug, Clone)]
+pub struct SchemaInfo {
+    pub name: String,
+    pub owner: String,
+}
+
+/// Basic table information for listing
+#[derive(Debug, Clone)]
+pub struct TableInfo {
+    pub name: String,
+    pub table_type: String, // "BASE TABLE", "VIEW", etc.
+    pub row_estimate: i64,
+    pub size_bytes: i64,
+}
+
+/// Column definition
+#[derive(Debug, Clone)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub is_nullable: bool,
+    pub column_default: Option<String>,
+    pub ordinal_position: i32,
+    pub is_primary_key: bool,
+}
+
+/// Constraint information
+#[derive(Debug, Clone)]
+pub struct ConstraintInfo {
+    pub name: String,
+    pub constraint_type: String, // "PRIMARY KEY", "FOREIGN KEY", "UNIQUE", "CHECK"
+    pub columns: Vec<String>,
+    pub foreign_table: Option<String>,
+    pub foreign_columns: Option<Vec<String>>,
+}
+
+/// Index information
+#[derive(Debug, Clone)]
+pub struct IndexInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub is_unique: bool,
+    pub is_primary: bool,
+    pub index_type: String, // "btree", "hash", etc.
+}
+
+/// Complete table structure
+#[derive(Debug, Clone)]
+pub struct TableStructure {
+    pub schema: String,
+    pub table: String,
+    pub columns: Vec<ColumnInfo>,
+    pub constraints: Vec<ConstraintInfo>,
+    pub indexes: Vec<IndexInfo>,
+    pub primary_key_columns: Vec<String>,
+}
+
+/// Single row of data (column name -> value as string)
+pub type TableRow = std::collections::HashMap<String, Option<String>>;
+
+/// Result of a paginated data query
+#[derive(Debug, Clone)]
+pub struct TableDataResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<TableRow>,
+    pub total_rows: i64,
+    pub page: usize,
+    pub page_size: usize,
+}
+
 pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname=postgres",
@@ -930,7 +1057,7 @@ pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
 }
 
 async fn show_privileges(cluster: &str, database: &str, user: &str) -> Result<()> {
-    let metadata = super::server::load_cluster_metadata(cluster)?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
 
     let conn_str = format!(
         "host=localhost port={} user={} dbname={}",
@@ -1030,4 +1157,501 @@ async fn show_privileges(cluster: &str, database: &str, user: &str) -> Result<()
     }
 
     Ok(())
+}
+
+// ============================================
+// Table Browser Functions
+// ============================================
+
+/// List all schemas in a database
+pub async fn list_schemas(cluster: &str, database: &str) -> Result<Vec<SchemaInfo>> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let rows = client
+        .query(
+            "SELECT schema_name, COALESCE(schema_owner, '') as schema_owner
+             FROM information_schema.schemata
+             WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+               AND schema_name NOT LIKE 'pg_temp_%'
+               AND schema_name NOT LIKE 'pg_toast_temp_%'
+             ORDER BY schema_name",
+            &[],
+        )
+        .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| SchemaInfo {
+            name: row.get(0),
+            owner: row.get(1),
+        })
+        .collect())
+}
+
+/// List all tables in a schema
+pub async fn list_tables(cluster: &str, database: &str, schema: &str) -> Result<Vec<TableInfo>> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let rows = client
+        .query(
+            "SELECT
+                t.table_name,
+                t.table_type,
+                COALESCE(c.reltuples::bigint, 0) as row_estimate,
+                COALESCE(pg_total_relation_size(c.oid), 0) as size_bytes
+             FROM information_schema.tables t
+             LEFT JOIN pg_class c ON c.relname = t.table_name
+             LEFT JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t.table_schema
+             WHERE t.table_schema = $1
+             ORDER BY t.table_name",
+            &[&schema],
+        )
+        .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| TableInfo {
+            name: row.get(0),
+            table_type: row.get(1),
+            row_estimate: row.get(2),
+            size_bytes: row.get(3),
+        })
+        .collect())
+}
+
+/// Get complete table structure (columns, constraints, indexes)
+pub async fn get_table_structure(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TableStructure> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Get primary key columns first
+    let pk_rows = client
+        .query(
+            "SELECT a.attname
+             FROM pg_index i
+             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+             JOIN pg_class c ON c.oid = i.indrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE i.indisprimary
+               AND n.nspname = $1
+               AND c.relname = $2",
+            &[&schema, &table],
+        )
+        .await?;
+
+    let pk_columns: std::collections::HashSet<String> =
+        pk_rows.iter().map(|r| r.get::<_, String>(0)).collect();
+    let primary_key_columns: Vec<String> = pk_columns.iter().cloned().collect();
+
+    // Get columns
+    let col_rows = client
+        .query(
+            "SELECT
+                column_name,
+                data_type,
+                is_nullable = 'YES' as is_nullable,
+                column_default,
+                ordinal_position::int4
+             FROM information_schema.columns
+             WHERE table_schema = $1 AND table_name = $2
+             ORDER BY ordinal_position",
+            &[&schema, &table],
+        )
+        .await?;
+
+    let columns: Vec<ColumnInfo> = col_rows
+        .iter()
+        .map(|row| {
+            let name: String = row.get(0);
+            ColumnInfo {
+                is_primary_key: pk_columns.contains(&name),
+                name,
+                data_type: row.get(1),
+                is_nullable: row.get(2),
+                column_default: row.get(3),
+                ordinal_position: row.get(4),
+            }
+        })
+        .collect();
+
+    // Get constraints
+    let constraint_rows = client
+        .query(
+            "SELECT
+                tc.constraint_name,
+                tc.constraint_type,
+                COALESCE(array_agg(DISTINCT kcu.column_name::text), ARRAY[]::text[]) as columns,
+                ccu.table_name as foreign_table,
+                array_agg(DISTINCT ccu.column_name::text) FILTER (WHERE ccu.column_name IS NOT NULL AND tc.constraint_type = 'FOREIGN KEY') as foreign_columns
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.key_column_usage kcu
+               ON tc.constraint_name = kcu.constraint_name
+               AND tc.table_schema = kcu.table_schema
+             LEFT JOIN information_schema.constraint_column_usage ccu
+               ON tc.constraint_name = ccu.constraint_name
+               AND tc.table_schema = ccu.table_schema
+               AND tc.constraint_type = 'FOREIGN KEY'
+             WHERE tc.table_schema = $1 AND tc.table_name = $2
+             GROUP BY tc.constraint_name, tc.constraint_type, ccu.table_name",
+            &[&schema, &table],
+        )
+        .await?;
+
+    let constraints: Vec<ConstraintInfo> = constraint_rows
+        .iter()
+        .map(|row| ConstraintInfo {
+            name: row.get(0),
+            constraint_type: row.get(1),
+            columns: row.get(2),
+            foreign_table: row.get(3),
+            foreign_columns: row.get(4),
+        })
+        .collect();
+
+    // Get indexes
+    let index_rows = client
+        .query(
+            "SELECT
+                i.relname as index_name,
+                array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) as columns,
+                ix.indisunique,
+                ix.indisprimary,
+                am.amname as index_type
+             FROM pg_index ix
+             JOIN pg_class i ON i.oid = ix.indexrelid
+             JOIN pg_class t ON t.oid = ix.indrelid
+             JOIN pg_namespace n ON n.oid = t.relnamespace
+             JOIN pg_am am ON am.oid = i.relam
+             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+             WHERE n.nspname = $1 AND t.relname = $2
+             GROUP BY i.relname, ix.indisunique, ix.indisprimary, am.amname",
+            &[&schema, &table],
+        )
+        .await?;
+
+    let indexes: Vec<IndexInfo> = index_rows
+        .iter()
+        .map(|row| IndexInfo {
+            name: row.get(0),
+            columns: row.get(1),
+            is_unique: row.get(2),
+            is_primary: row.get(3),
+            index_type: row.get(4),
+        })
+        .collect();
+
+    Ok(TableStructure {
+        schema: schema.to_string(),
+        table: table.to_string(),
+        columns,
+        constraints,
+        indexes,
+        primary_key_columns,
+    })
+}
+
+/// Get paginated table data
+pub async fn get_table_data(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    page: usize,
+    page_size: usize,
+) -> Result<TableDataResult> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Get total row count
+    let count_query = format!(
+        "SELECT count(*) FROM \"{}\".\"{}\"",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\"")
+    );
+    let count_row = client.query_one(&count_query, &[]).await?;
+    let total_rows: i64 = count_row.get(0);
+
+    // Get column names and types
+    let col_rows = client
+        .query(
+            "SELECT column_name, data_type
+             FROM information_schema.columns
+             WHERE table_schema = $1 AND table_name = $2
+             ORDER BY ordinal_position",
+            &[&schema, &table],
+        )
+        .await?;
+    let columns: Vec<String> = col_rows.iter().map(|r| r.get(0)).collect();
+
+    // Get paginated data
+    let offset = page * page_size;
+    let data_query = format!(
+        "SELECT * FROM \"{}\".\"{}\" LIMIT {} OFFSET {}",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\""),
+        page_size,
+        offset
+    );
+    let data_rows = client.query(&data_query, &[]).await?;
+
+    let rows: Vec<TableRow> = data_rows
+        .iter()
+        .map(|row| {
+            let mut map = std::collections::HashMap::new();
+            for (i, col) in columns.iter().enumerate() {
+                let value = convert_pg_value_to_string(row, i);
+                map.insert(col.clone(), value);
+            }
+            map
+        })
+        .collect();
+
+    Ok(TableDataResult {
+        columns,
+        rows,
+        total_rows,
+        page,
+        page_size,
+    })
+}
+
+/// Helper to convert PostgreSQL values to strings
+fn convert_pg_value_to_string(row: &tokio_postgres::Row, idx: usize) -> Option<String> {
+    // Try common types in order of likelihood
+    if let Ok(v) = row.try_get::<_, Option<String>>(idx) {
+        return v;
+    }
+    if let Ok(v) = row.try_get::<_, Option<i32>>(idx) {
+        return v.map(|n| n.to_string());
+    }
+    if let Ok(v) = row.try_get::<_, Option<i64>>(idx) {
+        return v.map(|n| n.to_string());
+    }
+    if let Ok(v) = row.try_get::<_, Option<i16>>(idx) {
+        return v.map(|n| n.to_string());
+    }
+    if let Ok(v) = row.try_get::<_, Option<f32>>(idx) {
+        return v.map(|n| n.to_string());
+    }
+    if let Ok(v) = row.try_get::<_, Option<f64>>(idx) {
+        return v.map(|n| n.to_string());
+    }
+    if let Ok(v) = row.try_get::<_, Option<bool>>(idx) {
+        return v.map(|b| b.to_string());
+    }
+    // Fallback for unsupported types
+    Some("[unsupported type]".to_string())
+}
+
+/// Insert a new row into a table
+pub async fn insert_row(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    values: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let columns: Vec<&str> = values.keys().map(|s| s.as_str()).collect();
+
+    // Quote identifiers properly
+    let quoted_columns: Vec<String> = columns
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+        .collect();
+
+    // Escape values and format as SQL literals
+    // This allows PostgreSQL to handle type coercion during INSERT
+    let escaped_values: Vec<String> = columns
+        .iter()
+        .map(|col| {
+            let val = &values[*col];
+            if val.is_empty() {
+                "NULL".to_string()
+            } else {
+                // Escape single quotes by doubling them
+                format!("'{}'", val.replace('\'', "''"))
+            }
+        })
+        .collect();
+
+    let query = format!(
+        "INSERT INTO \"{}\".\"{}\" ({}) VALUES ({})",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\""),
+        quoted_columns.join(", "),
+        escaped_values.join(", ")
+    );
+
+    client.execute(&query, &[]).await?;
+    Ok(())
+}
+
+/// Update a specific cell in a table
+pub async fn update_cell(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    pk_value: &str,
+    column: &str,
+    new_value: Option<&str>,
+) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Use SQL literals for the new value to allow PostgreSQL type coercion
+    // Use parameterized query only for pk_value (cast to text for comparison)
+    let escaped_pk = pk_value.replace('\'', "''");
+    let query = match new_value {
+        Some(val) => {
+            let escaped_val = val.replace('\'', "''");
+            format!(
+                "UPDATE \"{}\".\"{}\" SET \"{}\" = '{}' WHERE \"{}\"::text = '{}'",
+                schema.replace('"', "\"\""),
+                table.replace('"', "\"\""),
+                column.replace('"', "\"\""),
+                escaped_val,
+                pk_column.replace('"', "\"\""),
+                escaped_pk
+            )
+        }
+        None => format!(
+            "UPDATE \"{}\".\"{}\" SET \"{}\" = NULL WHERE \"{}\"::text = '{}'",
+            schema.replace('"', "\"\""),
+            table.replace('"', "\"\""),
+            column.replace('"', "\"\""),
+            pk_column.replace('"', "\"\""),
+            escaped_pk
+        ),
+    };
+
+    client.execute(&query, &[]).await?;
+    Ok(())
+}
+
+/// Delete a row from a table
+pub async fn delete_row(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    pk_value: &str,
+) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let conn_str = format!(
+        "host=localhost port={} user={} dbname={}",
+        metadata.port, metadata.username, database
+    );
+
+    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let query = format!(
+        "DELETE FROM \"{}\".\"{}\" WHERE \"{}\"::text = $1",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\""),
+        pk_column.replace('"', "\"\"")
+    );
+
+    client.execute(&query, &[&pk_value]).await?;
+    Ok(())
+}
+
+/// Export table data to CSV format
+pub fn export_to_csv(data: &TableDataResult) -> String {
+    let mut output = String::new();
+
+    // Header
+    output.push_str(&data.columns.join(","));
+    output.push('\n');
+
+    // Rows
+    for row in &data.rows {
+        let values: Vec<String> = data
+            .columns
+            .iter()
+            .map(|col| match row.get(col).and_then(|v| v.as_ref()) {
+                Some(val) => {
+                    // Escape CSV values
+                    if val.contains(',') || val.contains('"') || val.contains('\n') {
+                        format!("\"{}\"", val.replace('"', "\"\""))
+                    } else {
+                        val.clone()
+                    }
+                }
+                None => String::new(),
+            })
+            .collect();
+        output.push_str(&values.join(","));
+        output.push('\n');
+    }
+
+    output
+}
+
+/// Export table data to JSON format
+pub fn export_to_json(data: &TableDataResult) -> Result<String> {
+    Ok(serde_json::to_string_pretty(&data.rows)?)
 }

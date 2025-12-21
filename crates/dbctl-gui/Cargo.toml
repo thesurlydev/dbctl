@@ -1,0 +1,13 @@
+[package]
+name = "dbctl-gui"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+dbctl = { path = "../dbctl" }
+eframe = "0.30"
+egui = "0.30"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow.workspace = true
