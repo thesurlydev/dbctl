@@ -2,6 +2,158 @@ use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 
+// SQL keywords for syntax highlighting
+const SQL_KEYWORDS: &[&str] = &[
+    // DML
+    "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "INTO", "VALUES", "SET",
+    // Joins
+    "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "FULL", "CROSS", "ON", "USING",
+    // Clauses
+    "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET", "DISTINCT", "AS", "UNION",
+    "INTERSECT", "EXCEPT", "ALL", "ANY", "SOME",
+    // Conditions
+    "AND", "OR", "NOT", "IN", "BETWEEN", "LIKE", "ILIKE", "IS", "NULL", "EXISTS",
+    // DDL
+    "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "SCHEMA", "DATABASE",
+    "CONSTRAINT", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "UNIQUE", "CHECK",
+    "DEFAULT", "CASCADE", "RESTRICT",
+    // Other
+    "EXPLAIN", "ANALYZE", "WITH", "RECURSIVE", "CASE", "WHEN", "THEN", "ELSE", "END",
+    "CAST", "COALESCE", "NULLIF", "RETURNING", "CONFLICT", "DO", "NOTHING",
+    // Transactions
+    "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "TRANSACTION",
+    // Aggregates
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "ARRAY_AGG", "STRING_AGG",
+];
+
+const SQL_TYPES: &[&str] = &[
+    // Numeric
+    "INTEGER", "INT", "SMALLINT", "BIGINT", "SERIAL", "BIGSERIAL",
+    "NUMERIC", "DECIMAL", "REAL", "DOUBLE", "PRECISION", "FLOAT",
+    // Text
+    "TEXT", "VARCHAR", "CHAR", "CHARACTER", "VARYING",
+    // Boolean
+    "BOOLEAN", "BOOL", "TRUE", "FALSE",
+    // Date/Time
+    "DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ", "INTERVAL",
+    // Binary
+    "BYTEA", "BLOB",
+    // Other
+    "UUID", "JSON", "JSONB", "ARRAY", "XML",
+];
+
+/// Highlight SQL syntax and return a LayoutJob
+fn highlight_sql(text: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+
+    let keyword_color = egui::Color32::from_rgb(86, 156, 214);   // Blue
+    let type_color = egui::Color32::from_rgb(78, 201, 176);      // Teal
+    let string_color = egui::Color32::from_rgb(206, 145, 120);   // Orange
+    let number_color = egui::Color32::from_rgb(181, 206, 168);   // Light green
+    let comment_color = egui::Color32::from_rgb(106, 153, 85);   // Green
+    let default_color = egui::Color32::from_rgb(212, 212, 212);  // Light gray
+
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+
+        // Comments
+        if c == '-' && chars.peek() == Some(&'-') {
+            // Single-line comment
+            let mut comment = String::from(c);
+            while let Some(&next) = chars.peek() {
+                if next == '\n' {
+                    break;
+                }
+                comment.push(chars.next().unwrap());
+            }
+            job.append(&comment, 0.0, egui::TextFormat {
+                font_id: font_id.clone(),
+                color: comment_color,
+                ..Default::default()
+            });
+            continue;
+        }
+
+        // Strings (single quotes)
+        if c == '\'' {
+            let mut string_lit = String::from(c);
+            while let Some(next) = chars.next() {
+                string_lit.push(next);
+                if next == '\'' {
+                    // Check for escaped quote
+                    if chars.peek() == Some(&'\'') {
+                        string_lit.push(chars.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+            }
+            job.append(&string_lit, 0.0, egui::TextFormat {
+                font_id: font_id.clone(),
+                color: string_color,
+                ..Default::default()
+            });
+            continue;
+        }
+
+        // Numbers
+        if c.is_ascii_digit() || (c == '.' && chars.peek().map_or(false, |n| n.is_ascii_digit())) {
+            let mut number = String::from(c);
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_digit() || next == '.' {
+                    number.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            job.append(&number, 0.0, egui::TextFormat {
+                font_id: font_id.clone(),
+                color: number_color,
+                ..Default::default()
+            });
+            continue;
+        }
+
+        // Identifiers/keywords
+        if c.is_alphabetic() || c == '_' {
+            let mut word = String::from(c);
+            while let Some(&next) = chars.peek() {
+                if next.is_alphanumeric() || next == '_' {
+                    word.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+
+            let upper = word.to_uppercase();
+            let color = if SQL_KEYWORDS.contains(&upper.as_str()) {
+                keyword_color
+            } else if SQL_TYPES.contains(&upper.as_str()) {
+                type_color
+            } else {
+                default_color
+            };
+
+            job.append(&word, 0.0, egui::TextFormat {
+                font_id: font_id.clone(),
+                color,
+                ..Default::default()
+            });
+            continue;
+        }
+
+        // Default: operators, whitespace, punctuation
+        job.append(&c.to_string(), 0.0, egui::TextFormat {
+            font_id: font_id.clone(),
+            color: default_color,
+            ..Default::default()
+        });
+    }
+
+    job
+}
+
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -34,12 +186,246 @@ enum ExportFormat {
     Json,
 }
 
+// ============================================
+// SQL Query Tab Structures
+// ============================================
+
+/// A single query tab
+#[derive(Clone)]
+struct QueryTab {
+    id: usize,
+    name: String,
+    query: String,
+    result: String,
+    database: String,
+    is_executing: bool,
+}
+
+impl QueryTab {
+    fn new(id: usize, database: String) -> Self {
+        Self {
+            id,
+            name: format!("Query {}", id),
+            query: String::new(),
+            result: String::new(),
+            database,
+            is_executing: false,
+        }
+    }
+}
+
+/// Query history entry
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct HistoryEntry {
+    query: String,
+    database: String,
+    timestamp: u64,
+}
+
+/// Saved query file info
+#[derive(Clone)]
+struct SavedQuery {
+    name: String,
+    query: String,
+}
+
+/// Enhanced SQL state
+struct SqlState {
+    tabs: Vec<QueryTab>,
+    active_tab: usize,
+    next_tab_id: usize,
+
+    // History
+    history: Vec<HistoryEntry>,
+    history_index: Option<usize>,
+    show_history_popup: bool,
+
+    // Saved queries
+    saved_queries: Vec<SavedQuery>,
+    show_save_dialog: bool,
+    save_query_name: String,
+}
+
+impl Default for SqlState {
+    fn default() -> Self {
+        let history = SqlState::load_history();
+        let saved_queries = SqlState::load_saved_queries();
+        Self {
+            tabs: vec![QueryTab::new(1, "postgres".to_string())],
+            active_tab: 0,
+            next_tab_id: 2,
+            history,
+            history_index: None,
+            show_history_popup: false,
+            saved_queries,
+            show_save_dialog: false,
+            save_query_name: String::new(),
+        }
+    }
+}
+
+impl SqlState {
+    fn history_path() -> std::path::PathBuf {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".dbctl")
+            .join("query_history.json")
+    }
+
+    fn queries_dir() -> std::path::PathBuf {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".dbctl")
+            .join("queries")
+    }
+
+    fn load_history() -> Vec<HistoryEntry> {
+        let path = Self::history_path();
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(history) = serde_json::from_str(&content) {
+                    return history;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn save_history(&self) {
+        let path = Self::history_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_string_pretty(&self.history) {
+            let _ = std::fs::write(path, content);
+        }
+    }
+
+    fn add_to_history(&mut self, query: &str, database: &str) {
+        // Don't add empty or duplicate queries
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if let Some(first) = self.history.first() {
+            if first.query == trimmed && first.database == database {
+                return;
+            }
+        }
+
+        self.history.insert(
+            0,
+            HistoryEntry {
+                query: trimmed.to_string(),
+                database: database.to_string(),
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            },
+        );
+
+        // Keep only 50 entries
+        if self.history.len() > 50 {
+            self.history.truncate(50);
+        }
+        self.save_history();
+    }
+
+    fn load_saved_queries() -> Vec<SavedQuery> {
+        let dir = Self::queries_dir();
+        if !dir.exists() {
+            return Vec::new();
+        }
+
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                if path.extension()?.to_str()? == "sql" {
+                    let name = path.file_stem()?.to_string_lossy().to_string();
+                    let query = std::fs::read_to_string(&path).ok()?;
+                    Some(SavedQuery { name, query })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn refresh_saved_queries(&mut self) {
+        self.saved_queries = Self::load_saved_queries();
+    }
+
+    fn save_query(&mut self, name: &str, query: &str) -> Result<(), String> {
+        // Sanitize name
+        let sanitized: String = name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if sanitized.is_empty() {
+            return Err("Invalid query name".to_string());
+        }
+
+        let dir = Self::queries_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return Err(format!("Failed to create directory: {}", e));
+        }
+
+        let path = dir.join(format!("{}.sql", sanitized));
+        if let Err(e) = std::fs::write(&path, query) {
+            return Err(format!("Failed to save query: {}", e));
+        }
+
+        self.refresh_saved_queries();
+        Ok(())
+    }
+
+    fn delete_saved_query(&mut self, name: &str) -> Result<(), String> {
+        let path = Self::queries_dir().join(format!("{}.sql", name));
+        if let Err(e) = std::fs::remove_file(&path) {
+            return Err(format!("Failed to delete query: {}", e));
+        }
+        self.refresh_saved_queries();
+        Ok(())
+    }
+
+    fn current_tab(&self) -> &QueryTab {
+        &self.tabs[self.active_tab]
+    }
+
+    fn current_tab_mut(&mut self) -> &mut QueryTab {
+        &mut self.tabs[self.active_tab]
+    }
+
+    fn add_tab(&mut self, database: String) {
+        if self.tabs.len() >= 10 {
+            return; // Max 10 tabs
+        }
+        let tab = QueryTab::new(self.next_tab_id, database);
+        self.next_tab_id += 1;
+        self.tabs.push(tab);
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    fn close_tab(&mut self, index: usize) {
+        if self.tabs.len() <= 1 {
+            return; // Keep at least one tab
+        }
+        self.tabs.remove(index);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum AsyncResult {
     Databases(String, Vec<String>),
     Users(String, Vec<dbctl::UserInfo>),
     Stats(String, dbctl::ClusterStats),
-    SqlResult(String),
+    SqlTabResult(usize, String), // (tab_id, result)
     Message(String),
     Error(String),
     // Table browser results
@@ -122,10 +508,8 @@ struct DbctlApp {
     logs_content: String,
     logs_lines: usize,
 
-    // SQL state
-    sql_query: String,
-    sql_result: String,
-    sql_database: String,
+    // SQL state (enhanced with tabs, history, saved queries)
+    sql_state: SqlState,
 
     // Install state
     show_install_dialog: bool,
@@ -188,9 +572,7 @@ impl DbctlApp {
             new_user_superuser: false,
             logs_content: String::new(),
             logs_lines: 100,
-            sql_query: String::new(),
-            sql_result: String::new(),
-            sql_database: String::from("postgres"),
+            sql_state: SqlState::default(),
             show_install_dialog: false,
             install_version: String::from("17"),
             installed_versions: Vec::new(),
@@ -540,8 +922,12 @@ impl DbctlApp {
                 AsyncResult::Databases(cluster, dbs) => {
                     if self.selected_cluster().map(|c| &c.name) == Some(&cluster) {
                         self.databases = dbs;
-                        if !self.databases.is_empty() && self.sql_database.is_empty() {
-                            self.sql_database = self.databases[0].clone();
+                        // Update current SQL tab database if it's empty
+                        if !self.databases.is_empty() {
+                            let tab = self.sql_state.current_tab_mut();
+                            if tab.database.is_empty() {
+                                tab.database = self.databases[0].clone();
+                            }
                         }
                     }
                 }
@@ -555,8 +941,12 @@ impl DbctlApp {
                         c.stats = Some(stats);
                     }
                 }
-                AsyncResult::SqlResult(result) => {
-                    self.sql_result = result;
+                AsyncResult::SqlTabResult(tab_id, result) => {
+                    // Find the tab by ID and update its result
+                    if let Some(tab) = self.sql_state.tabs.iter_mut().find(|t| t.id == tab_id) {
+                        tab.result = result;
+                        tab.is_executing = false;
+                    }
                 }
                 AsyncResult::Message(msg) => {
                     self.status_message = msg;
@@ -689,16 +1079,85 @@ impl DbctlApp {
     }
 
     fn execute_sql(&mut self, cluster: &str) {
-        match dbctl::postgres::exec_sql(cluster, &self.sql_database, &self.sql_query) {
-            Ok(result) => {
-                self.sql_result = result;
-                self.status_message = "SQL executed successfully".to_string();
-            }
-            Err(e) => {
-                self.sql_result = format!("Error: {}", e);
-                self.status_message = format!("SQL error: {}", e);
-            }
+        let tab = self.sql_state.current_tab_mut();
+        if tab.query.trim().is_empty() || tab.is_executing {
+            return;
         }
+
+        let query = tab.query.clone();
+        let database = tab.database.clone();
+        let tab_id = tab.id;
+        tab.is_executing = true;
+
+        // Add to history
+        self.sql_state.add_to_history(&query, &database);
+        self.sql_state.history_index = None;
+
+        let tx = self.result_tx.clone();
+        let cluster = cluster.to_string();
+        self.runtime.spawn(async move {
+            // Use spawn_blocking since exec_sql is synchronous
+            let result = tokio::task::spawn_blocking(move || {
+                dbctl::postgres::exec_sql(&cluster, &database, &query)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(output)) => {
+                    let _ = tx.send(AsyncResult::SqlTabResult(tab_id, output));
+                }
+                Ok(Err(e)) => {
+                    let _ = tx.send(AsyncResult::SqlTabResult(tab_id, format!("Error: {}", e)));
+                }
+                Err(e) => {
+                    let _ = tx.send(AsyncResult::SqlTabResult(tab_id, format!("Execution error: {}", e)));
+                }
+            }
+        });
+        self.status_message = "Executing query...".to_string();
+    }
+
+    fn execute_explain(&mut self, cluster: &str, analyze: bool) {
+        let tab = self.sql_state.current_tab_mut();
+        if tab.query.trim().is_empty() || tab.is_executing {
+            return;
+        }
+
+        let prefix = if analyze {
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "
+        } else {
+            "EXPLAIN (FORMAT TEXT) "
+        };
+        let explain_query = format!("{}{}", prefix, tab.query);
+        let database = tab.database.clone();
+        let tab_id = tab.id;
+        tab.is_executing = true;
+
+        let tx = self.result_tx.clone();
+        let cluster = cluster.to_string();
+        self.runtime.spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                dbctl::postgres::exec_sql(&cluster, &database, &explain_query)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(output)) => {
+                    let _ = tx.send(AsyncResult::SqlTabResult(tab_id, output));
+                }
+                Ok(Err(e)) => {
+                    let _ = tx.send(AsyncResult::SqlTabResult(tab_id, format!("Error: {}", e)));
+                }
+                Err(e) => {
+                    let _ = tx.send(AsyncResult::SqlTabResult(tab_id, format!("Execution error: {}", e)));
+                }
+            }
+        });
+        self.status_message = if analyze {
+            "Running EXPLAIN ANALYZE...".to_string()
+        } else {
+            "Running EXPLAIN...".to_string()
+        };
     }
 
     fn backup_database(&mut self, cluster: &str, database: &str) {
@@ -730,11 +1189,11 @@ impl eframe::App for DbctlApp {
 
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Install PostgreSQL...").clicked() {
                         self.show_install_dialog = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Create Cluster...").clicked() {
                         self.show_create_cluster_dialog = true;
@@ -742,13 +1201,13 @@ impl eframe::App for DbctlApp {
                         if let Ok(port) = dbctl::server::find_unused_port() {
                             self.new_cluster_port = port.to_string();
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Refresh").clicked() {
                         self.refresh_clusters();
                         self.refresh_installed_versions();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
@@ -975,7 +1434,7 @@ impl DbctlApp {
             ui.horizontal(|ui| {
                 ui.monospace(&conn_str);
                 if ui.button("Copy").clicked() {
-                    ui.output_mut(|o| o.copied_text = conn_str.clone());
+                    ui.ctx().copy_text(conn_str.clone());
                     self.status_message = "Connection string copied".to_string();
                 }
             });
@@ -1011,7 +1470,8 @@ impl DbctlApp {
                     let selected = self.selected_database == Some(i);
                     if ui.selectable_label(selected, db).clicked() {
                         self.selected_database = Some(i);
-                        self.sql_database = db.clone();
+                        // Also update current SQL tab database
+                        self.sql_state.current_tab_mut().database = db.clone();
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1142,49 +1602,294 @@ impl DbctlApp {
     }
 
     fn render_sql_tab(&mut self, ui: &mut egui::Ui, cluster: &ClusterInfo) {
+        let cluster_name = cluster.name.clone();
+
+        // Keyboard shortcuts
+        let execute_shortcut = ui.ctx().input(|i| {
+            i.key_pressed(egui::Key::Enter) && i.modifiers.command
+        });
+        let save_shortcut = ui.ctx().input(|i| {
+            i.key_pressed(egui::Key::S) && i.modifiers.command
+        });
+        let history_up = ui.ctx().input(|i| {
+            i.key_pressed(egui::Key::ArrowUp) && i.modifiers.command
+        });
+        let history_down = ui.ctx().input(|i| {
+            i.key_pressed(egui::Key::ArrowDown) && i.modifiers.command
+        });
+
+        // Tab bar
         ui.horizontal(|ui| {
-            ui.label("Database:");
-            egui::ComboBox::from_id_salt("sql_db")
-                .selected_text(&self.sql_database)
-                .show_ui(ui, |ui| {
-                    for db in &self.databases {
-                        ui.selectable_value(&mut self.sql_database, db.clone(), db);
+            let tabs_len = self.sql_state.tabs.len();
+            let mut tab_to_close: Option<usize> = None;
+
+            for (idx, tab) in self.sql_state.tabs.iter().enumerate() {
+                let is_active = idx == self.sql_state.active_tab;
+                let tab_text = if tab.is_executing {
+                    format!("{} ...", tab.name)
+                } else {
+                    tab.name.clone()
+                };
+
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(is_active, &tab_text).clicked() {
+                        self.sql_state.active_tab = idx;
+                    }
+                    // Close button (only show if more than 1 tab)
+                    if tabs_len > 1 && ui.small_button("x").clicked() {
+                        tab_to_close = Some(idx);
                     }
                 });
-
-            if ui.button("Execute").clicked() && !self.sql_query.is_empty() {
-                self.execute_sql(&cluster.name);
             }
 
-            if ui.button("Clear").clicked() {
-                self.sql_query.clear();
-                self.sql_result.clear();
+            // Add new tab button
+            if self.sql_state.tabs.len() < 10 {
+                if ui.button("+").clicked() {
+                    let db = self.sql_state.current_tab().database.clone();
+                    self.sql_state.add_tab(db);
+                }
+            }
+
+            // Close tab if requested
+            if let Some(idx) = tab_to_close {
+                self.sql_state.close_tab(idx);
             }
         });
 
         ui.separator();
 
-        ui.label("SQL Query:");
-        ui.add(
-            egui::TextEdit::multiline(&mut self.sql_query)
-                .font(egui::TextStyle::Monospace)
-                .desired_width(f32::INFINITY)
-                .desired_rows(5)
-        );
+        // Get current tab info (need to work around borrow checker)
+        let active_idx = self.sql_state.active_tab;
+        let current_db = self.sql_state.tabs[active_idx].database.clone();
+        let is_executing = self.sql_state.tabs[active_idx].is_executing;
+
+        // Controls row
+        ui.horizontal(|ui| {
+            ui.label("Database:");
+            egui::ComboBox::from_id_salt("sql_db")
+                .selected_text(&current_db)
+                .show_ui(ui, |ui| {
+                    for db in &self.databases.clone() {
+                        if ui.selectable_label(&current_db == db, db).clicked() {
+                            self.sql_state.tabs[active_idx].database = db.clone();
+                        }
+                    }
+                });
+
+            ui.separator();
+
+            // Load saved query dropdown
+            if !self.sql_state.saved_queries.is_empty() {
+                egui::ComboBox::from_id_salt("load_query")
+                    .selected_text("Load...")
+                    .show_ui(ui, |ui| {
+                        let queries = self.sql_state.saved_queries.clone();
+                        for sq in &queries {
+                            if ui.selectable_label(false, &sq.name).clicked() {
+                                self.sql_state.tabs[active_idx].query = sq.query.clone();
+                            }
+                        }
+                    });
+            }
+
+            if ui.button("Save").clicked() {
+                self.sql_state.show_save_dialog = true;
+            }
+
+            ui.separator();
+
+            let execute_enabled = !self.sql_state.tabs[active_idx].query.trim().is_empty() && !is_executing;
+
+            if ui.add_enabled(execute_enabled, egui::Button::new("Execute")).clicked() {
+                self.execute_sql(&cluster_name);
+            }
+
+            if ui.add_enabled(execute_enabled, egui::Button::new("Explain")).clicked() {
+                self.execute_explain(&cluster_name, false);
+            }
+
+            if ui.add_enabled(execute_enabled, egui::Button::new("Analyze")).clicked() {
+                self.execute_explain(&cluster_name, true);
+            }
+
+            if ui.button("Clear").clicked() {
+                self.sql_state.tabs[active_idx].query.clear();
+                self.sql_state.tabs[active_idx].result.clear();
+            }
+
+            if is_executing {
+                ui.spinner();
+            }
+        });
 
         ui.separator();
 
+        // Query input
+        ui.horizontal(|ui| {
+            ui.label("SQL Query:");
+            if ui.small_button("History").clicked() {
+                self.sql_state.show_history_popup = !self.sql_state.show_history_popup;
+            }
+        });
+
+        // Query text area with syntax highlighting
+        {
+            let font_id = egui::FontId::monospace(14.0);
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                let mut job = highlight_sql(text.as_str(), font_id.clone());
+                job.wrap.max_width = wrap_width;
+                ui.fonts_mut(|f| f.layout_job(job))
+            };
+
+            let tab = &mut self.sql_state.tabs[active_idx];
+            ui.add(
+                egui::TextEdit::multiline(&mut tab.query)
+                    .font(egui::FontId::monospace(14.0))
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(8)
+                    .layouter(&mut layouter)
+            );
+        }
+
+        // Handle keyboard shortcuts after the text edit
+        if execute_shortcut && !self.sql_state.tabs[active_idx].query.trim().is_empty() && !is_executing {
+            self.execute_sql(&cluster_name);
+        }
+        if save_shortcut {
+            self.sql_state.show_save_dialog = true;
+        }
+        if history_up {
+            self.navigate_history(-1);
+        }
+        if history_down {
+            self.navigate_history(1);
+        }
+
+        // History popup
+        if self.sql_state.show_history_popup && !self.sql_state.history.is_empty() {
+            egui::Window::new("Query History")
+                .collapsible(false)
+                .resizable(true)
+                .default_width(400.0)
+                .default_height(300.0)
+                .show(ui.ctx(), |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("history_scroll")
+                        .max_height(250.0)
+                        .show(ui, |ui| {
+                            let history = self.sql_state.history.clone();
+                            for entry in history.iter() {
+                                ui.horizontal(|ui| {
+                                    let preview: String = entry.query.chars().take(60).collect();
+                                    let preview = if entry.query.len() > 60 {
+                                        format!("{}...", preview)
+                                    } else {
+                                        preview
+                                    };
+                                    if ui.button(&preview).clicked() {
+                                        self.sql_state.tabs[active_idx].query = entry.query.clone();
+                                        self.sql_state.tabs[active_idx].database = entry.database.clone();
+                                        self.sql_state.show_history_popup = false;
+                                    }
+                                    ui.label(format!("[{}]", entry.database));
+                                });
+                            }
+                        });
+
+                    if ui.button("Close").clicked() {
+                        self.sql_state.show_history_popup = false;
+                    }
+                });
+        }
+
+        // Save query dialog
+        if self.sql_state.show_save_dialog {
+            egui::Window::new("Save Query")
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.sql_state.save_query_name);
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            let name = self.sql_state.save_query_name.clone();
+                            let query = self.sql_state.tabs[active_idx].query.clone();
+                            if !name.is_empty() && !query.trim().is_empty() {
+                                match self.sql_state.save_query(&name, &query) {
+                                    Ok(()) => {
+                                        self.status_message = format!("Saved query '{}'", name);
+                                    }
+                                    Err(e) => {
+                                        self.status_message = e;
+                                    }
+                                }
+                            }
+                            self.sql_state.show_save_dialog = false;
+                            self.sql_state.save_query_name.clear();
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.sql_state.show_save_dialog = false;
+                            self.sql_state.save_query_name.clear();
+                        }
+                    });
+                });
+        }
+
+        ui.separator();
+
+        // Result display
         ui.label("Result:");
         egui::ScrollArea::vertical()
             .id_salt("sql_result_scroll")
             .max_height(200.0)
             .show(ui, |ui| {
+                let result = &self.sql_state.tabs[active_idx].result;
                 ui.add(
-                    egui::TextEdit::multiline(&mut self.sql_result.as_str())
+                    egui::TextEdit::multiline(&mut result.as_str())
                         .font(egui::TextStyle::Monospace)
                         .desired_width(f32::INFINITY)
                 );
             });
+
+        // Shortcuts help
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.small("Cmd+Enter: Execute | Cmd+S: Save | Cmd+Up/Down: History");
+        });
+    }
+
+    fn navigate_history(&mut self, direction: i32) {
+        if self.sql_state.history.is_empty() {
+            return;
+        }
+
+        let active_idx = self.sql_state.active_tab;
+        let new_index = match self.sql_state.history_index {
+            None => {
+                if direction < 0 { Some(0) } else { None }
+            }
+            Some(idx) => {
+                let new_idx = idx as i32 + direction;
+                if new_idx < 0 {
+                    None
+                } else if new_idx >= self.sql_state.history.len() as i32 {
+                    Some(self.sql_state.history.len() - 1)
+                } else {
+                    Some(new_idx as usize)
+                }
+            }
+        };
+
+        self.sql_state.history_index = new_index;
+
+        if let Some(idx) = new_index {
+            if let Some(entry) = self.sql_state.history.get(idx) {
+                self.sql_state.tabs[active_idx].query = entry.query.clone();
+            }
+        }
     }
 
     fn render_tables_tab(&mut self, ui: &mut egui::Ui, cluster: &ClusterInfo) {
@@ -1459,7 +2164,7 @@ impl DbctlApp {
             if ui.button("Export CSV").clicked() {
                 if let Some(data) = &self.table_browser.table_data {
                     let csv = dbctl::postgres::export_to_csv(data);
-                    ui.output_mut(|o| o.copied_text = csv);
+                    ui.ctx().copy_text(csv);
                     self.status_message = "CSV copied to clipboard".to_string();
                 }
             }
@@ -1467,7 +2172,7 @@ impl DbctlApp {
             if ui.button("Export JSON").clicked() {
                 if let Some(data) = &self.table_browser.table_data {
                     if let Ok(json) = dbctl::postgres::export_to_json(data) {
-                        ui.output_mut(|o| o.copied_text = json);
+                        ui.ctx().copy_text(json);
                         self.status_message = "JSON copied to clipboard".to_string();
                     }
                 }

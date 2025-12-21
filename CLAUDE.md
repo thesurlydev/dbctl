@@ -154,7 +154,14 @@ cargo run -- createdb proddb -c production
 - **Auto-start**: `ensure_cluster_running()` in `src/server.rs` automatically starts stopped clusters before database operations
 - **Interactive prompts**: Using the `dialoguer` crate for password prompts, confirmations, and missing arguments
 - **Colored output**: Using the `colored` crate for status symbols (●/○) and colored text in errors and status displays
+- **Table Browser (GUI)**: The `Tables` tab in dbctl-gui provides schema tree navigation, table structure viewing (columns, constraints, indexes), paginated data browsing, row insert/delete, and CSV/JSON export. Key functions: `list_schemas()`, `list_tables()`, `get_table_structure()`, `get_table_data()`, `insert_row()`, `delete_row()`, `export_to_csv()`, `export_to_json()` in `postgres.rs`
 - The primary use case for this tool is development and testing
 - Best practices for CLI apps should be used when adding or updating features
-- Always update @README.md and @CLAUDE.md after making changes to ensure they reflect the current code
+- Always update @README.md, @QUICKSTART.md, and @CLAUDE.md after making changes to ensure they reflect the current code
 - Always run all tests after each change to verify everything still works
+
+## Documentation Structure
+
+- `README.md` - Main documentation with feature overview, installation instructions, and command reference
+- `QUICKSTART.md` - Comprehensive quick start guide with practical examples demonstrating most features
+- `CLAUDE.md` - This file - technical guidance for AI assistants working with the codebase

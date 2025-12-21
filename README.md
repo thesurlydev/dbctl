@@ -20,6 +20,24 @@ Designed for local development with smart defaults - minimal typing, auto-select
 - No root access required - all data stored in `~/.dbctl/`
 - Supports macOS and Linux (x86_64 and ARM64)
 
+### GUI Features (dbctl-gui)
+
+- Visual cluster management with start/stop controls
+- Database and user management interfaces
+- **SQL Query Tab** with:
+  - Multiple query tabs (up to 10)
+  - Syntax highlighting (keywords, types, strings, numbers, comments)
+  - Query history with recall (Cmd+Up/Down to navigate)
+  - Save/load queries to files (~/.dbctl/queries/)
+  - EXPLAIN and EXPLAIN ANALYZE buttons
+  - Keyboard shortcuts (Cmd+Enter to execute, Cmd+S to save)
+- **Table Browser** with:
+  - Schema tree navigation with collapsible schemas
+  - Table structure viewer (columns, constraints, indexes)
+  - Paginated data browsing with configurable page size
+  - Insert and delete rows (tables with primary keys)
+  - Export data to CSV/JSON (copied to clipboard)
+
 ## Installation
 
 Using just (recommended):
@@ -44,27 +62,16 @@ sudo cp target/release/dbctl /usr/local/bin/
 
 ## Quick Start
 
+See [QUICKSTART.md](QUICKSTART.md) for a comprehensive guide with examples of all major features.
+
+Basic workflow:
+
 ```bash
-# Install PostgreSQL 16.3
-dbctl install 16.3
-
-# Create a new cluster (interactive)
-dbctl init mydev
-
-# Or with explicit options
-dbctl init mydev --version 16.3 --port 5432 --username postgres
-
-# Start the cluster (auto-selected since there's only one)
-dbctl start
-
-# Create a database (cluster auto-selected, auto-starts if stopped)
-dbctl createdb myapp
-
-# Open an interactive shell
-dbctl shell myapp
-
-# Or connect with external psql
-psql -h localhost -p 5432 -U postgres -d myapp
+dbctl install 16.3        # Install PostgreSQL
+dbctl init mydev          # Create a cluster (interactive)
+dbctl start               # Start the cluster
+dbctl createdb myapp      # Create a database
+dbctl shell myapp         # Open interactive shell
 ```
 
 ## Command Overview
