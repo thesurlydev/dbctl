@@ -30,22 +30,24 @@
 - [x] Query execution plan visualization (EXPLAIN/EXPLAIN ANALYZE buttons)
 - [x] Keyboard shortcuts (Cmd+Enter to execute, Cmd+S to save, Cmd+Up/Down for history)
 
-### Connection Management
-- Connection string builder
-- Save connection profiles
-- Connect to remote PostgreSQL servers (not just local clusters)
-- SSL/TLS configuration
+### Connection Management (Implemented)
+- [x] Connection string builder (auto-generated, copy to clipboard)
+- [x] Save connection profiles (persisted to disk)
+- [x] Connect to remote PostgreSQL servers (add/edit/delete connections)
+- [x] SSL/TLS configuration (disable, require modes)
 
 ---
 
 ## Phase 2: Developer Experience
 
-### Schema Management
-- Visual schema designer
-- Create/alter tables via UI
-- Index management (create, drop, view usage stats)
-- Foreign key visualization
-- Generate migration SQL from schema changes
+### Schema Management (In Progress)
+- [x] Visual schema designer (canvas with draggable tables)
+- [x] Create/alter tables via UI
+- [x] Index management (create, drop)
+- [x] Foreign key visualization (bezier lines between tables)
+- [x] Generate migration SQL from schema changes (live preview)
+- [x] Keyboard shortcuts (Cmd+N, Cmd+S, Cmd+D, F2, Cmd+Z, Cmd+Shift+Z)
+- [x] Undo/redo support
 
 ### Data Import/Export
 - Import CSV/JSON to tables
