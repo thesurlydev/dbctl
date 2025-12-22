@@ -37,6 +37,11 @@ Designed for local development with smart defaults - minimal typing, auto-select
   - Paginated data browsing with configurable page size
   - Insert and delete rows (tables with primary keys)
   - Export data to CSV/JSON (copied to clipboard)
+- **Command Palette** (Cmd+K):
+  - Fuzzy search across 45+ commands
+  - Quick access to all app functionality
+  - Keyboard shortcuts displayed for each command
+  - Categories: Cluster, Database, Table, Schema, SQL, Users, Connections, Navigation
 
 ## Installation
 

@@ -1,3 +1,4 @@
+mod command_palette;
 mod dialogs;
 mod schema_designer;
 mod sql_state;
@@ -108,6 +109,9 @@ pub struct DbctlApp {
     runtime: tokio::runtime::Runtime,
     result_rx: mpsc::Receiver<AsyncResult>,
     result_tx: mpsc::Sender<AsyncResult>,
+
+    // Command palette
+    pub command_palette: command_palette::CommandPaletteState,
 }
 
 impl DbctlApp {
@@ -170,6 +174,7 @@ impl DbctlApp {
             runtime,
             result_rx,
             result_tx,
+            command_palette: command_palette::CommandPaletteState::default(),
         };
 
         app.refresh_clusters();
@@ -1232,6 +1237,12 @@ impl eframe::App for DbctlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_async_results();
 
+        // Global keyboard shortcuts
+        let cmd_k = ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.command);
+        if cmd_k && !self.command_palette.visible {
+            self.command_palette.toggle();
+        }
+
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -1522,5 +1533,8 @@ impl eframe::App for DbctlApp {
         dialogs::render_drop_db_dialog(self, ctx);
         dialogs::render_add_connection_dialog(self, ctx);
         dialogs::render_edit_connection_dialog(self, ctx);
+
+        // Command palette (render last to appear on top)
+        command_palette::render_command_palette(self, ctx);
     }
 }
