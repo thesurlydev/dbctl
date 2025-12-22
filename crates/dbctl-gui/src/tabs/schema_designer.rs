@@ -3,8 +3,8 @@ use eframe::egui;
 use crate::ai_chat::{ApiKeyManager, MessageRole, SchemaChangeProposal};
 use crate::schema_designer::{
     canvas::{auto_layout_tables, layout_new_tables, render_canvas},
-    get_all_templates, ColumnModel, ConstraintModel, FkAction, IndexModel, SchemaAction,
-    SchemaModel, TableModel, TemplateCategory,
+    generate_ddl_sql, get_all_templates, ColumnModel, ConstraintModel, FkAction, IndexModel,
+    SchemaAction, SchemaModel, TableModel, TemplateCategory,
 };
 use crate::state::ClusterInfo;
 use crate::DbctlApp;
@@ -80,7 +80,8 @@ pub fn render_schema_designer_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster
     // Main content - split between canvas, AI sidebar, and SQL preview
     let available_height = ui.available_height();
     let sql_preview_height = if app.schema_designer.sql_preview_expanded { 150.0 } else { 30.0 };
-    let canvas_height = available_height - sql_preview_height - 10.0;
+    let ddl_panel_height = if app.schema_designer.ddl_panel_expanded { 230.0 } else { 0.0 };
+    let canvas_height = available_height - sql_preview_height - ddl_panel_height - 10.0;
 
     // Horizontal layout for canvas and sidebars
     ui.allocate_ui_with_layout(
@@ -278,17 +279,11 @@ fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) 
             }
         }
 
-        // Right side actions
+        // Right side: show pending changes count
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let has_changes = app.schema_designer.has_changes();
-            if ui.add_enabled(has_changes, egui::Button::new("Apply"))
-                .on_hover_text("Apply Changes (Cmd+S)")
-                .clicked()
-            {
-                app.schema_designer.show_apply_migration_dialog = true;
-            }
             if has_changes {
-                ui.label(format!("({})", app.schema_designer.pending_sql.len()));
+                ui.label(format!("{} pending (Cmd+S to apply)", app.schema_designer.pending_sql.len()));
             }
         });
     });
@@ -316,7 +311,7 @@ fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) 
         ui.checkbox(&mut app.schema_designer.canvas.show_grid, "Grid");
         ui.checkbox(&mut app.schema_designer.canvas.snap_to_grid, "Snap");
 
-        // Right side - AI toggle and History
+        // Right side - AI toggle, History, and DDL
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ai_button_text = if app.ai_chat.visible { "Hide AI" } else { "AI Assistant" };
             if ui.button(ai_button_text).on_hover_text("Cmd+Shift+I").clicked() {
@@ -326,6 +321,11 @@ fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) 
             let history_button_text = if app.schema_designer.history_panel_visible { "Hide History" } else { "History" };
             if ui.button(history_button_text).on_hover_text("Cmd+Shift+H").clicked() {
                 app.schema_designer.history_panel_visible = !app.schema_designer.history_panel_visible;
+            }
+
+            let ddl_button_text = if app.schema_designer.ddl_panel_expanded { "Hide DDL" } else { "DDL" };
+            if ui.button(ddl_button_text).on_hover_text("Show complete DDL for all objects").clicked() {
+                app.schema_designer.ddl_panel_expanded = !app.schema_designer.ddl_panel_expanded;
             }
         });
     });
@@ -348,6 +348,7 @@ fn render_sql_preview(app: &mut DbctlApp, ui: &mut egui::Ui) {
     if app.schema_designer.sql_preview_expanded {
         let sql_text = app.schema_designer.pending_sql.join("\n\n");
         egui::ScrollArea::vertical()
+            .id_salt("sql_preview_scroll")
             .max_height(120.0)
             .show(ui, |ui| {
                 if sql_text.is_empty() {
@@ -362,6 +363,65 @@ fn render_sql_preview(app: &mut DbctlApp, ui: &mut egui::Ui) {
                 }
             });
     }
+
+    // DDL Panel
+    if app.schema_designer.ddl_panel_expanded {
+        render_ddl_panel(app, ui);
+    }
+}
+
+fn render_ddl_panel(app: &DbctlApp, ui: &mut egui::Ui) {
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("DDL - Complete Schema Definition").strong());
+
+        let table_count = app.schema_designer.working_schema.tables.len();
+        if table_count > 0 {
+            ui.label(
+                egui::RichText::new(format!("({} tables)", table_count))
+                    .size(11.0)
+                    .color(app.theme.text_muted),
+            );
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Copy to clipboard button
+            let ddl_text = generate_ddl_sql(
+                &app.schema_designer.working_schema,
+                &app.schema_designer.selected_schema,
+            );
+            if ui.button("Copy").on_hover_text("Copy DDL to clipboard").clicked() {
+                ui.ctx().copy_text(ddl_text.clone());
+            }
+        });
+    });
+
+    // Generate the DDL
+    let ddl_text = generate_ddl_sql(
+        &app.schema_designer.working_schema,
+        &app.schema_designer.selected_schema,
+    );
+
+    egui::ScrollArea::vertical()
+        .id_salt("ddl_panel_scroll")
+        .max_height(200.0)
+        .show(ui, |ui| {
+            if ddl_text.is_empty() {
+                ui.label(
+                    egui::RichText::new("No tables in schema")
+                        .italics()
+                        .color(egui::Color32::GRAY),
+                );
+            } else {
+                ui.add(
+                    egui::TextEdit::multiline(&mut ddl_text.as_str())
+                        .font(egui::FontId::monospace(12.0))
+                        .desired_width(f32::INFINITY)
+                        .interactive(false),
+                );
+            }
+        });
 }
 
 fn render_new_table_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
@@ -376,7 +436,11 @@ fn render_new_table_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Table Name:");
-                ui.text_edit_singleline(&mut app.schema_designer.new_table_name);
+                let response = ui.text_edit_singleline(&mut app.schema_designer.new_table_name);
+                if app.schema_designer.focus_new_table_name {
+                    response.request_focus();
+                    app.schema_designer.focus_new_table_name = false;
+                }
             });
 
             ui.add_space(10.0);
@@ -472,7 +536,11 @@ fn render_new_column_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             egui::Grid::new("new_col_grid").num_columns(2).show(ui, |ui| {
                 ui.label("Name:");
-                ui.text_edit_singleline(&mut app.schema_designer.new_column_name);
+                let response = ui.text_edit_singleline(&mut app.schema_designer.new_column_name);
+                if app.schema_designer.focus_new_column_name {
+                    response.request_focus();
+                    app.schema_designer.focus_new_column_name = false;
+                }
                 ui.end_row();
 
                 ui.label("Type:");
@@ -934,7 +1002,7 @@ fn render_apply_migration_dialog(app: &mut DbctlApp, ctx: &egui::Context, cluste
                     ui.spinner();
                     ui.label("Applying...");
                 } else {
-                    if ui.button("Apply").clicked() {
+                    if ui.button("Confirm & Apply").clicked() {
                         let db = app.schema_designer.selected_database.clone();
                         if let Some(db) = db {
                             let statements = app.schema_designer.pending_sql.clone();

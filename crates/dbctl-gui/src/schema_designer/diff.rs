@@ -259,3 +259,82 @@ fn generate_add_fk(table_name: &str, constraint: &ConstraintModel, schema_name: 
     sql.push(';');
     sql
 }
+
+/// Generate complete DDL SQL for all objects in the schema
+pub fn generate_ddl_sql(schema: &SchemaModel, schema_name: &str) -> String {
+    let mut sections = Vec::new();
+
+    // Sort tables by name for consistent output
+    let mut table_names: Vec<_> = schema.tables.keys().collect();
+    table_names.sort();
+
+    // Generate CREATE TABLE statements
+    for table_name in &table_names {
+        if let Some(table) = schema.tables.get(*table_name) {
+            sections.push(generate_full_create_table(table, schema_name));
+        }
+    }
+
+    // Generate CREATE INDEX statements (non-primary key indexes)
+    for table_name in &table_names {
+        if let Some(table) = schema.tables.get(*table_name) {
+            for index in table.indexes.iter().filter(|i| !i.is_primary) {
+                sections.push(generate_create_index(&table.name, index, schema_name));
+            }
+        }
+    }
+
+    // Generate ALTER TABLE ADD CONSTRAINT for foreign keys (after all tables exist)
+    for table_name in &table_names {
+        if let Some(table) = schema.tables.get(*table_name) {
+            for constraint in table.constraints.iter().filter(|c| c.constraint_type == ConstraintType::ForeignKey) {
+                sections.push(generate_add_fk(&table.name, constraint, schema_name));
+            }
+        }
+    }
+
+    sections.join("\n\n")
+}
+
+/// Generate a complete CREATE TABLE statement with all constraints
+fn generate_full_create_table(table: &TableModel, schema_name: &str) -> String {
+    let mut sql = format!("CREATE TABLE \"{}\".\"{}\" (\n", schema_name, table.name);
+
+    let mut definitions = Vec::new();
+
+    // Column definitions
+    for col in &table.columns {
+        let mut def = format!("    \"{}\" {}", col.name, col.data_type);
+        if !col.is_nullable {
+            def.push_str(" NOT NULL");
+        }
+        if let Some(ref default) = col.default_value {
+            def.push_str(&format!(" DEFAULT {}", default));
+        }
+        definitions.push(def);
+    }
+
+    // Primary key constraint
+    let pk_cols: Vec<_> = table.columns.iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| format!("\"{}\"", c.name))
+        .collect();
+    if !pk_cols.is_empty() {
+        definitions.push(format!("    PRIMARY KEY ({})", pk_cols.join(", ")));
+    }
+
+    // Unique constraints
+    for constraint in table.constraints.iter().filter(|c| c.constraint_type == ConstraintType::Unique) {
+        let cols: Vec<_> = constraint.columns.iter().map(|c| format!("\"{}\"", c)).collect();
+        definitions.push(format!("    CONSTRAINT \"{}\" UNIQUE ({})", constraint.name, cols.join(", ")));
+    }
+
+    // Check constraints
+    for constraint in table.constraints.iter().filter(|c| c.constraint_type == ConstraintType::Check) {
+        definitions.push(format!("    CONSTRAINT \"{}\" CHECK (/* condition */)", constraint.name));
+    }
+
+    sql.push_str(&definitions.join(",\n"));
+    sql.push_str("\n);");
+    sql
+}

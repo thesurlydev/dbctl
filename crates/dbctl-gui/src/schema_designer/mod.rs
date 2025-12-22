@@ -6,7 +6,7 @@ pub mod templates;
 
 pub use actions::{SchemaAction, TimestampedAction};
 pub use canvas::CanvasState;
-pub use diff::generate_migration_sql;
+pub use diff::{generate_ddl_sql, generate_migration_sql};
 pub use models::{ColumnModel, ConstraintModel, ConstraintType, FkAction, IndexModel, SchemaModel, TableModel};
 pub use templates::{get_all_templates, TemplateCategory};
 
@@ -51,9 +51,11 @@ pub struct SchemaDesignerState {
 
     // New table form data
     pub new_table_name: String,
+    pub focus_new_table_name: bool,
 
     // New column form data
     pub new_column_name: String,
+    pub focus_new_column_name: bool,
     pub new_column_type: String,
     pub new_column_size: String,
     pub new_column_nullable: bool,
@@ -95,6 +97,9 @@ pub struct SchemaDesignerState {
 
     // SQL preview panel expanded
     pub sql_preview_expanded: bool,
+
+    // DDL panel expanded
+    pub ddl_panel_expanded: bool,
 
     // Template selection state
     pub show_template_dialog: bool,
@@ -383,10 +388,12 @@ impl SchemaDesignerState {
     /// Reset form fields
     pub fn reset_new_table_form(&mut self) {
         self.new_table_name.clear();
+        self.focus_new_table_name = true;
     }
 
     pub fn reset_new_column_form(&mut self) {
         self.new_column_name.clear();
+        self.focus_new_column_name = true;
         self.new_column_type = "text".to_string();
         self.new_column_size.clear();
         self.new_column_nullable = true;
