@@ -2,11 +2,13 @@ mod actions;
 pub mod canvas;
 mod diff;
 mod models;
+pub mod templates;
 
-pub use actions::SchemaAction;
+pub use actions::{SchemaAction, TimestampedAction};
 pub use canvas::CanvasState;
 pub use diff::generate_migration_sql;
 pub use models::{ColumnModel, ConstraintModel, ConstraintType, FkAction, IndexModel, SchemaModel, TableModel};
+pub use templates::{get_all_templates, TemplateCategory};
 
 use std::collections::{HashMap, HashSet};
 
@@ -80,9 +82,12 @@ pub struct SchemaDesignerState {
     pub pending_sql: Vec<String>,
     pub migration_error: Option<String>,
 
-    // Undo/Redo
-    pub action_history: Vec<SchemaAction>,
+    // Undo/Redo with timestamps
+    pub action_history: Vec<TimestampedAction>,
     pub action_index: usize,
+
+    // History panel visibility
+    pub history_panel_visible: bool,
 
     // Loading states
     pub loading_schema: bool,
@@ -90,6 +95,17 @@ pub struct SchemaDesignerState {
 
     // SQL preview panel expanded
     pub sql_preview_expanded: bool,
+
+    // Template selection state
+    pub show_template_dialog: bool,
+    pub template_search_query: String,
+    pub selected_template: Option<String>,
+    pub template_preview: Option<SchemaModel>,
+    pub show_template_confirm_dialog: bool,
+
+    // Delete table confirmation
+    pub show_delete_table_dialog: bool,
+    pub pending_delete_table: Option<String>,
 }
 
 /// Target for rename operation
@@ -129,8 +145,8 @@ impl SchemaDesignerState {
         // Truncate any redo history
         self.action_history.truncate(self.action_index);
 
-        // Push new action
-        self.action_history.push(action);
+        // Push new action with timestamp
+        self.action_history.push(TimestampedAction::new(action));
         self.action_index = self.action_history.len();
 
         // Limit history size
@@ -150,7 +166,7 @@ impl SchemaDesignerState {
         }
 
         self.action_index -= 1;
-        let action = self.action_history[self.action_index].clone();
+        let action = self.action_history[self.action_index].action.clone();
         self.apply_inverse_action(&action);
         self.refresh_pending_sql();
         true
@@ -162,11 +178,33 @@ impl SchemaDesignerState {
             return false;
         }
 
-        let action = self.action_history[self.action_index].clone();
+        let action = self.action_history[self.action_index].action.clone();
         self.apply_action(&action);
         self.action_index += 1;
         self.refresh_pending_sql();
         true
+    }
+
+    /// Jump to a specific point in the history
+    pub fn jump_to_action(&mut self, target_index: usize) {
+        // Clamp target to valid range
+        let target = target_index.min(self.action_history.len());
+
+        // If target is before current position: undo until we reach target
+        while self.action_index > target {
+            self.action_index -= 1;
+            let action = self.action_history[self.action_index].action.clone();
+            self.apply_inverse_action(&action);
+        }
+
+        // If target is after current position: redo until we reach target
+        while self.action_index < target {
+            let action = self.action_history[self.action_index].action.clone();
+            self.apply_action(&action);
+            self.action_index += 1;
+        }
+
+        self.refresh_pending_sql();
     }
 
     /// Apply an action to the working schema
@@ -325,6 +363,19 @@ impl SchemaDesignerState {
         self.pending_sql.clear();
         self.action_history.clear();
         self.action_index = 0;
+        self.canvas = CanvasState::default();
+        self.visual_column_order.clear();
+    }
+
+    /// Reset for reload after migration - preserves action history
+    pub fn reset_for_reload(&mut self) {
+        self.original_schema = SchemaModel::default();
+        self.working_schema = SchemaModel::default();
+        self.selected_table = None;
+        self.selected_column = None;
+        self.selected_index = None;
+        self.pending_sql.clear();
+        // Preserve action_history and action_index
         self.canvas = CanvasState::default();
         self.visual_column_order.clear();
     }

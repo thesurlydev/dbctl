@@ -1,3 +1,4 @@
+mod ai_chat;
 mod command_palette;
 mod dialogs;
 mod schema_designer;
@@ -10,6 +11,7 @@ pub mod theme;
 
 use std::sync::mpsc;
 
+use display_info::DisplayInfo;
 use eframe::egui;
 
 use schema_designer::SchemaDesignerState;
@@ -19,9 +21,12 @@ use table_browser::TableBrowserState;
 use theme::{GuiConfig, Theme, ThemeMode};
 
 fn main() -> eframe::Result<()> {
+    // Get screen dimensions and set window to half the size
+    let (window_width, window_height) = get_half_screen_size();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1000.0, 700.0])
+            .with_inner_size([window_width, window_height])
             .with_min_inner_size([800.0, 500.0]),
         ..Default::default()
     };
@@ -31,6 +36,23 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(DbctlApp::new(cc)))),
     )
+}
+
+/// Get half the primary display's dimensions, with fallback defaults
+fn get_half_screen_size() -> (f32, f32) {
+    if let Ok(displays) = DisplayInfo::all() {
+        // Find primary display, or use first one
+        let display = displays
+            .iter()
+            .find(|d| d.is_primary)
+            .or_else(|| displays.first());
+
+        if let Some(d) = display {
+            return (d.width as f32 / 2.0, d.height as f32 / 2.0);
+        }
+    }
+    // Fallback if we can't get display info
+    (1200.0, 700.0)
 }
 
 pub struct DbctlApp {
@@ -119,6 +141,11 @@ pub struct DbctlApp {
     pub theme_mode: ThemeMode,
     pub theme: Theme,
     theme_applied: bool,
+
+    // AI Chat
+    pub ai_chat: ai_chat::AiChatState,
+    pub show_api_key_dialog: bool,
+    pub api_key_input: String,
 }
 
 impl DbctlApp {
@@ -190,6 +217,9 @@ impl DbctlApp {
             theme_mode,
             theme,
             theme_applied: false,
+            ai_chat: ai_chat::AiChatState::new(),
+            show_api_key_dialog: false,
+            api_key_input: String::new(),
         };
 
         app.refresh_clusters();
@@ -490,6 +520,20 @@ impl DbctlApp {
         self.schema_designer.selected_database = Some(database.to_string());
         self.schema_designer.selected_schema = schema.to_string();
 
+        self.spawn_schema_load(cluster, database, schema);
+    }
+
+    /// Reload schema after migration - preserves action history
+    pub fn reload_schema_for_designer(&mut self, cluster: &str, database: &str, schema: &str) {
+        self.schema_designer.loading_schema = true;
+        self.schema_designer.reset_for_reload();
+        self.schema_designer.selected_database = Some(database.to_string());
+        self.schema_designer.selected_schema = schema.to_string();
+
+        self.spawn_schema_load(cluster, database, schema);
+    }
+
+    fn spawn_schema_load(&mut self, cluster: &str, database: &str, schema: &str) {
         let tx = self.result_tx.clone();
         let cluster = cluster.to_string();
         let database = database.to_string();
@@ -1048,13 +1092,13 @@ impl DbctlApp {
                     self.schema_designer.show_apply_migration_dialog = false;
                     self.status_message = msg;
 
-                    // Reload the schema to get the updated state
+                    // Reload the schema to get the updated state (preserve action history)
                     if let (Some(cluster), Some(db)) = (
                         self.selected_cluster().map(|c| c.name.clone()),
                         self.schema_designer.selected_database.clone(),
                     ) {
                         let schema = self.schema_designer.selected_schema.clone();
-                        self.load_schema_for_designer(&cluster, &db, &schema);
+                        self.reload_schema_for_designer(&cluster, &db, &schema);
                     }
                 }
                 AsyncResult::MigrationFailed(error) => {
@@ -1062,8 +1106,63 @@ impl DbctlApp {
                     self.schema_designer.migration_error = Some(error.clone());
                     self.status_message = format!("Migration failed: {}", error);
                 }
+                // AI Chat results
+                AsyncResult::AiChatResponse(response, proposal) => {
+                    self.ai_chat.is_loading = false;
+                    self.ai_chat.add_assistant_message(&response);
+                    self.ai_chat.pending_changes = proposal;
+                }
+                AsyncResult::AiChatError(error) => {
+                    self.ai_chat.is_loading = false;
+                    self.ai_chat.error_message = Some(error);
+                }
             }
         }
+    }
+
+    /// Send a message to the AI chat assistant
+    pub fn send_ai_chat_message(&mut self) {
+        if self.ai_chat.input_text.trim().is_empty() || self.ai_chat.is_loading {
+            return;
+        }
+
+        let message = self.ai_chat.input_text.clone();
+        self.ai_chat.add_user_message(&message);
+        self.ai_chat.input_text.clear();
+        self.ai_chat.is_loading = true;
+        self.ai_chat.error_message = None;
+
+        let api_key = match ai_chat::ApiKeyManager::get_api_key() {
+            Some(key) => key,
+            None => {
+                self.ai_chat.is_loading = false;
+                self.ai_chat.error_message = Some("API key not configured".to_string());
+                return;
+            }
+        };
+
+        let tx = self.result_tx.clone();
+        let current_schema = self.schema_designer.working_schema.clone();
+        let history: Vec<ai_chat::ChatMessage> = self.ai_chat.messages[..self.ai_chat.messages.len().saturating_sub(1)]
+            .to_vec();
+
+        self.runtime.spawn(async move {
+            match ai_chat::claude_client::generate_schema_changes(
+                &api_key,
+                &current_schema,
+                &history,
+                &message,
+            )
+            .await
+            {
+                Ok((response, proposal)) => {
+                    let _ = tx.send(AsyncResult::AiChatResponse(response, proposal));
+                }
+                Err(e) => {
+                    let _ = tx.send(AsyncResult::AiChatError(e));
+                }
+            }
+        });
     }
 
     pub fn start_cluster(&mut self, name: &str) {

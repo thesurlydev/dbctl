@@ -810,3 +810,153 @@ pub fn auto_layout_tables(schema: &mut SchemaModel) {
         table.position = egui::pos2(x, start_y + row as f32 * spacing_y);
     }
 }
+
+/// Layout only new tables, positioning them to avoid overlapping existing tables
+pub fn layout_new_tables(schema: &mut SchemaModel, new_table_names: &[String]) {
+    if new_table_names.is_empty() {
+        return;
+    }
+
+    let gap = 40.0;
+    let row_height = 300.0;
+    let cols = 3;
+
+    // Calculate bounding box of existing tables (those not in new_table_names)
+    let mut max_x: f32 = 0.0;
+    let mut max_y: f32 = 0.0;
+    let mut has_existing = false;
+
+    for (name, table) in &schema.tables {
+        if !new_table_names.contains(name) {
+            has_existing = true;
+            let table_width = calculate_table_width(table);
+            let table_height = estimate_table_height(table);
+            max_x = max_x.max(table.position.x + table_width);
+            max_y = max_y.max(table.position.y + table_height);
+        }
+    }
+
+    // Determine starting position for new tables
+    // If there are existing tables, start below them with some padding
+    let start_x = 50.0;
+    let start_y = if has_existing {
+        max_y + gap * 2.0 // Add extra padding below existing tables
+    } else {
+        50.0
+    };
+
+    // Collect and sort new tables by name
+    let mut new_tables: Vec<&mut TableModel> = schema
+        .tables
+        .values_mut()
+        .filter(|t| new_table_names.contains(&t.name))
+        .collect();
+    new_tables.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Calculate max width for each column among new tables
+    let mut col_widths = vec![0.0_f32; cols];
+    for (i, table) in new_tables.iter().enumerate() {
+        let col = i % cols;
+        col_widths[col] = col_widths[col].max(calculate_table_width(table));
+    }
+
+    // Position new tables in a grid below existing ones
+    for (i, table) in new_tables.iter_mut().enumerate() {
+        let col = i % cols;
+        let row = i / cols;
+
+        let x = start_x + (0..col).map(|c| col_widths[c] + gap).sum::<f32>();
+        let y = start_y + row as f32 * row_height;
+
+        table.position = egui::pos2(x, y);
+    }
+}
+
+/// Estimate table height based on column count
+fn estimate_table_height(table: &TableModel) -> f32 {
+    let header_height = 28.0;
+    let row_height = 22.0;
+    let visible_columns = if table.collapsed { 0 } else { table.columns.len() };
+    header_height + visible_columns as f32 * row_height + 16.0 // Add padding
+}
+
+/// Find a non-overlapping position for a new table
+/// Searches for a free spot using a grid-based approach, checking for collisions with existing tables
+pub fn find_non_overlapping_position(schema: &SchemaModel, new_table_width: f32, new_table_height: f32) -> egui::Pos2 {
+    let gap = 40.0; // Minimum gap between tables
+    let start_x = 50.0;
+    let start_y = 50.0;
+
+    // If no existing tables, place at top-left
+    if schema.tables.is_empty() {
+        return egui::pos2(start_x, start_y);
+    }
+
+    // Collect bounding boxes of all existing tables
+    let existing_rects: Vec<egui::Rect> = schema
+        .tables
+        .values()
+        .map(|t| {
+            let width = calculate_table_width(t);
+            let height = estimate_table_height(t);
+            egui::Rect::from_min_size(t.position, egui::vec2(width, height))
+        })
+        .collect();
+
+    // Calculate the bounding box of all existing tables
+    let mut max_x: f32 = 0.0;
+    let mut max_y: f32 = 0.0;
+    for rect in &existing_rects {
+        max_x = max_x.max(rect.max.x);
+        max_y = max_y.max(rect.max.y);
+    }
+
+    // Try positions in a grid pattern, checking for overlaps
+    let step_x = 200.0; // Horizontal step for searching
+    let step_y = 150.0; // Vertical step for searching
+    let max_search_x = (max_x + 1000.0).max(1000.0);
+    let max_search_y = (max_y + 1000.0).max(1000.0);
+
+    let new_size = egui::vec2(new_table_width + gap, new_table_height + gap);
+
+    // First, try to find a spot to the right of existing tables
+    let mut best_pos: Option<egui::Pos2> = None;
+    let mut best_score = f32::MAX;
+
+    let mut y = start_y;
+    while y < max_search_y {
+        let mut x = start_x;
+        while x < max_search_x {
+            let candidate = egui::Rect::from_min_size(egui::pos2(x, y), new_size);
+
+            // Check if this position overlaps with any existing table
+            let overlaps = existing_rects.iter().any(|r| {
+                // Add gap to the existing rect for collision check
+                let expanded = r.expand(gap / 2.0);
+                expanded.intersects(candidate)
+            });
+
+            if !overlaps {
+                // Score based on distance from origin (prefer top-left placement)
+                let score = x + y * 1.5; // Slight preference for horizontal over vertical
+                if score < best_score {
+                    best_score = score;
+                    best_pos = Some(egui::pos2(x, y));
+                }
+                // Found a spot in this row, move to next row
+                break;
+            }
+
+            x += step_x;
+        }
+        y += step_y;
+    }
+
+    // If we found a valid position, use it
+    if let Some(pos) = best_pos {
+        return pos;
+    }
+
+    // Fallback: place below all existing tables
+    egui::pos2(start_x, max_y + gap)
+}

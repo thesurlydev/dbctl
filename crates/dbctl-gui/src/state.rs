@@ -47,6 +47,9 @@ pub enum AsyncResult {
     SchemaLoadError(String),
     MigrationApplied(String),
     MigrationFailed(String),
+    // AI Chat results
+    AiChatResponse(String, Option<crate::ai_chat::SchemaChangeProposal>),
+    AiChatError(String),
 }
 
 /// Local cluster information

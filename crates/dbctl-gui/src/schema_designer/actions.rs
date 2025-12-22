@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use eframe::egui;
 use super::models::{ColumnModel, ConstraintModel, IndexModel, TableModel};
 
@@ -73,6 +74,48 @@ impl SchemaAction {
                     format!("{} changes", actions.len())
                 }
             }
+        }
+    }
+}
+
+/// An action with a timestamp for the audit log
+#[derive(Debug, Clone)]
+pub struct TimestampedAction {
+    pub action: SchemaAction,
+    pub timestamp: DateTime<Local>,
+}
+
+impl TimestampedAction {
+    pub fn new(action: SchemaAction) -> Self {
+        Self {
+            action,
+            timestamp: Local::now(),
+        }
+    }
+
+    /// Get the action description
+    pub fn description(&self) -> String {
+        self.action.description()
+    }
+
+    /// Format the timestamp for display
+    pub fn format_timestamp(&self) -> String {
+        let now = Local::now();
+        let duration = now.signed_duration_since(self.timestamp);
+
+        if duration.num_seconds() < 60 {
+            "Just now".to_string()
+        } else if duration.num_minutes() < 60 {
+            let mins = duration.num_minutes();
+            if mins == 1 {
+                "1 min ago".to_string()
+            } else {
+                format!("{} mins ago", mins)
+            }
+        } else if duration.num_hours() < 24 {
+            self.timestamp.format("%l:%M %p").to_string().trim().to_string()
+        } else {
+            self.timestamp.format("%b %d, %l:%M %p").to_string().trim().to_string()
         }
     }
 }

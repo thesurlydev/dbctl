@@ -68,6 +68,12 @@ pub enum CommandId {
     AddForeignKey,
     Undo,
     Redo,
+    OpenTemplates,
+    ToggleAiChat,
+    ToggleHistory,
+    JumpToHistoryStart,
+    JumpToHistoryEnd,
+    ConfigureApiKey,
 
     // SQL operations
     ExecuteSql,
@@ -336,6 +342,82 @@ pub fn build_command_registry() -> Vec<Command> {
             category: CommandCategory::Schema,
             shortcut: Some("Cmd+Shift+Z".to_string()),
             keywords: vec![],
+        },
+        Command {
+            id: CommandId::OpenTemplates,
+            label: "Open Schema Templates".to_string(),
+            category: CommandCategory::Schema,
+            shortcut: None,
+            keywords: vec![
+                "template".to_string(),
+                "starter".to_string(),
+                "pattern".to_string(),
+                "ecommerce".to_string(),
+                "blog".to_string(),
+                "saas".to_string(),
+            ],
+        },
+        Command {
+            id: CommandId::ToggleAiChat,
+            label: "Toggle AI Assistant".to_string(),
+            category: CommandCategory::Schema,
+            shortcut: Some("Cmd+Shift+I".to_string()),
+            keywords: vec![
+                "ai".to_string(),
+                "chat".to_string(),
+                "claude".to_string(),
+                "generate".to_string(),
+                "assistant".to_string(),
+            ],
+        },
+        Command {
+            id: CommandId::ToggleHistory,
+            label: "Toggle History Panel".to_string(),
+            category: CommandCategory::Schema,
+            shortcut: Some("Cmd+Shift+H".to_string()),
+            keywords: vec![
+                "history".to_string(),
+                "timeline".to_string(),
+                "audit".to_string(),
+                "log".to_string(),
+                "changes".to_string(),
+            ],
+        },
+        Command {
+            id: CommandId::JumpToHistoryStart,
+            label: "Jump to Initial State".to_string(),
+            category: CommandCategory::Schema,
+            shortcut: None,
+            keywords: vec![
+                "history".to_string(),
+                "start".to_string(),
+                "beginning".to_string(),
+                "reset".to_string(),
+            ],
+        },
+        Command {
+            id: CommandId::JumpToHistoryEnd,
+            label: "Jump to Latest State".to_string(),
+            category: CommandCategory::Schema,
+            shortcut: None,
+            keywords: vec![
+                "history".to_string(),
+                "end".to_string(),
+                "latest".to_string(),
+                "current".to_string(),
+            ],
+        },
+        Command {
+            id: CommandId::ConfigureApiKey,
+            label: "Configure API Key".to_string(),
+            category: CommandCategory::Schema,
+            shortcut: None,
+            keywords: vec![
+                "api".to_string(),
+                "key".to_string(),
+                "anthropic".to_string(),
+                "settings".to_string(),
+            ],
         },
         // SQL operations
         Command {
@@ -928,6 +1010,33 @@ pub fn execute_command(app: &mut DbctlApp, cmd_id: CommandId) {
         }
         CommandId::Redo => {
             app.schema_designer.redo();
+        }
+        CommandId::OpenTemplates => {
+            app.current_tab = Tab::SchemaDesigner;
+            app.schema_designer.show_template_dialog = true;
+            app.schema_designer.template_search_query.clear();
+            app.schema_designer.selected_template = None;
+            app.schema_designer.template_preview = None;
+        }
+        CommandId::ToggleAiChat => {
+            app.current_tab = Tab::SchemaDesigner;
+            app.ai_chat.toggle();
+        }
+        CommandId::ToggleHistory => {
+            app.current_tab = Tab::SchemaDesigner;
+            app.schema_designer.history_panel_visible = !app.schema_designer.history_panel_visible;
+        }
+        CommandId::JumpToHistoryStart => {
+            app.current_tab = Tab::SchemaDesigner;
+            app.schema_designer.jump_to_action(0);
+        }
+        CommandId::JumpToHistoryEnd => {
+            app.current_tab = Tab::SchemaDesigner;
+            let len = app.schema_designer.action_history.len();
+            app.schema_designer.jump_to_action(len);
+        }
+        CommandId::ConfigureApiKey => {
+            app.show_api_key_dialog = true;
         }
 
         // SQL operations

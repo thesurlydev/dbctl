@@ -47,10 +47,16 @@ pub struct Theme {
     // Schema designer specific
     pub fk_line: Color32,
     pub pk_badge: Color32,
+    pub pk_badge_text: Color32,
     pub fk_badge: Color32,
     pub drag_indicator: Color32,
     pub dragged_row_bg: Color32,
     pub column_selected_bg: Color32,
+
+    // AI Chat colors
+    pub chat_user_bg: Color32,
+    pub chat_assistant_bg: Color32,
+    pub chat_input_bg: Color32,
 
     // Text colors
     pub text_primary: Color32,
@@ -72,9 +78,10 @@ pub struct Theme {
     pub warning: Color32,
     pub success: Color32,
 
-    // Command palette
+    // Command palette and history panel
     pub backdrop: Color32,
     pub selection_bg: Color32,
+    pub selection_text: Color32,
 }
 
 impl Theme {
@@ -96,10 +103,16 @@ impl Theme {
             // Schema designer
             fk_line: Color32::from_rgb(102, 102, 200),
             pk_badge: Color32::from_rgb(255, 193, 7),
+            pk_badge_text: Color32::from_rgb(0, 0, 0),
             fk_badge: Color32::from_rgb(156, 39, 176),
             drag_indicator: Color32::from_rgb(66, 133, 244),
             dragged_row_bg: Color32::from_rgba_unmultiplied(66, 133, 244, 40),
             column_selected_bg: Color32::from_rgb(200, 220, 255),
+
+            // AI Chat
+            chat_user_bg: Color32::from_rgb(232, 240, 254),
+            chat_assistant_bg: Color32::from_rgb(248, 249, 250),
+            chat_input_bg: Color32::from_rgb(255, 255, 255),
 
             // Text
             text_primary: Color32::from_rgb(0, 0, 0),
@@ -124,6 +137,7 @@ impl Theme {
             // Command palette
             backdrop: Color32::from_rgba_unmultiplied(0, 0, 0, 128),
             selection_bg: Color32::from_rgb(60, 100, 180),
+            selection_text: Color32::WHITE,
         }
     }
 
@@ -145,10 +159,16 @@ impl Theme {
             // Schema designer
             fk_line: Color32::from_rgb(140, 140, 220),
             pk_badge: Color32::from_rgb(255, 193, 7),
+            pk_badge_text: Color32::from_rgb(0, 0, 0),
             fk_badge: Color32::from_rgb(186, 104, 200),
             drag_indicator: Color32::from_rgb(100, 149, 237),
             dragged_row_bg: Color32::from_rgba_unmultiplied(100, 149, 237, 40),
             column_selected_bg: Color32::from_rgb(55, 70, 100),
+
+            // AI Chat
+            chat_user_bg: Color32::from_rgb(45, 55, 72),
+            chat_assistant_bg: Color32::from_rgb(40, 44, 52),
+            chat_input_bg: Color32::from_rgb(30, 34, 42),
 
             // Text
             text_primary: Color32::from_rgb(220, 220, 220),
@@ -173,6 +193,7 @@ impl Theme {
             // Command palette
             backdrop: Color32::from_rgba_unmultiplied(0, 0, 0, 180),
             selection_bg: Color32::from_rgb(50, 80, 140),
+            selection_text: Color32::WHITE,
         }
     }
 
