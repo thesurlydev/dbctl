@@ -1,6 +1,14 @@
-# dbctl-gui MVP Feature Roadmap
+# dbctl-gui Feature Roadmap
 
-## Current Features (Implemented)
+## Vision
+
+**TablePlus's beauty + DataGrip's power + Git-native + AI-assisted design**
+
+A PostgreSQL-first schema tool that's fast, keyboard-driven, and understands your workflow.
+
+---
+
+## Implemented
 
 ### Core CLI
 - [x] Cluster management (start, stop, restart, remove)
@@ -8,165 +16,251 @@
 - [x] PostgreSQL installation (multiple versions)
 - [x] Database CRUD operations
 - [x] User management with privileges
-- [x] SQL query execution
-- [x] Log viewing
 - [x] Backup/restore (pg_dump/psql)
-- [x] Grant/revoke privileges on databases, schemas, tables
-
----
-
-## Phase 1: Core Improvements (Implemented)
 
 ### Table Browser
-- [x] Visual table explorer with schema tree view
-- [x] Collapsible schema navigation
-- [x] View table structure (columns, types, constraints, indexes)
-- [x] Browse table data with pagination (configurable page size)
-- [x] Insert new rows via dialog
-- [x] Delete rows with confirmation
-- [x] Update cells inline
-- [x] Export table data to CSV/JSON
+- [x] Schema tree navigation with collapsible sections
+- [x] Table structure view (columns, types, constraints, indexes)
+- [x] Paginated data browsing
+- [x] Insert/update/delete rows
+- [x] Export to CSV/JSON
 
-### Query Enhancements
-- [x] Query history with recall (50 queries, stored in ~/.dbctl/query_history.json)
-- [x] Save/load queries to files (~/.dbctl/queries/*.sql)
-- [x] Multiple query tabs (up to 10)
-- [x] Syntax highlighting (keywords, types, strings, numbers, comments)
-- [x] Query execution plan visualization (EXPLAIN/EXPLAIN ANALYZE buttons)
-- [x] Keyboard shortcuts (Cmd+Enter to execute, Cmd+S to save, Cmd+Up/Down for history)
+### Query Editor
+- [x] Multiple tabs (up to 10)
+- [x] Syntax highlighting
+- [x] Query history (50 entries, persisted)
+- [x] Save/load queries
+- [x] EXPLAIN / EXPLAIN ANALYZE
+- [x] Keyboard shortcuts (Cmd+Enter, Cmd+S, Cmd+Up/Down)
 
 ### Connection Management
-- [x] Connection string builder (auto-generated, copy to clipboard)
-- [x] Save connection profiles (persisted to ~/.dbctl/connections.json)
-- [x] Connect to remote PostgreSQL servers (add/edit/delete connections)
-- [x] SSL/TLS configuration (disable, require modes)
-- [x] Connection testing with version display
-
----
-
-## Phase 2: Developer Experience (Implemented)
+- [x] Local clusters and remote servers
+- [x] SSL/TLS support (disable, require)
+- [x] Connection profiles (persisted)
+- [x] Connection string display with copy
 
 ### Schema Designer
-- [x] Visual canvas-based schema editor
+- [x] Canvas-based visual editor
 - [x] Draggable table positioning
-- [x] Create/alter/drop tables via UI
-- [x] Add/edit/rename/drop columns
-- [x] Index management (create, drop)
-- [x] Foreign key visualization (bezier curves between tables)
-- [x] Constraint management (PK, FK, UNIQUE)
-- [x] Generate migration SQL from schema changes (live preview)
-- [x] Apply migrations with confirmation dialog
-- [x] Undo/redo support with action history
-- [x] Keyboard shortcuts:
-  - Cmd+N: New table
-  - Cmd+S: Apply migration
-  - Cmd+D: Duplicate table
-  - F2: Rename table/column
-  - Cmd+Z / Cmd+Shift+Z: Undo/Redo
-  - Delete/Backspace: Delete selected
-  - Escape: Cancel operation
-- [x] Auto-layout for tables
-- [x] Visual column reordering (drag-and-drop)
-- [x] Semantic default column ordering (PK first, FK second, timestamps last)
+- [x] Create/alter/drop tables, columns, indexes
+- [x] Foreign key visualization (bezier curves)
+- [x] Live migration SQL preview
+- [x] Undo/redo with action history
+- [x] Auto-layout
+- [x] Semantic column ordering (PK, FK, regular, timestamps)
 - [x] Formatted column types (varchar(N), numeric(p,s))
-
-### Data Export (Partial)
-- [x] Export table data to CSV
-- [x] Export table data to JSON
-- [x] Backup database to SQL file
-- [x] Restore database from SQL file
-- [ ] Import CSV/JSON to tables
-- [ ] Export query results
-- [ ] pg_dump format selection (plain, custom, directory)
-- [ ] Scheduled backups
-
-### Monitoring (Basic)
-- [x] Cluster statistics (database count, user count, table count)
-- [x] Table row count estimates
-- [x] Table size estimates
-- [ ] Active connections display
-- [ ] Query performance stats (pg_stat_statements)
-- [ ] Index usage statistics
-- [ ] Vacuum/analyze status
+- [x] Keyboard shortcuts (Cmd+N, Cmd+S, Cmd+D, F2, Cmd+Z)
 
 ---
 
-## Phase 3: Advanced Features (Not Started)
+## Phase 1: Developer Experience Polish
 
-### Extension Manager
-- [ ] Browse available extensions
-- [ ] Install/uninstall extensions
-- [ ] Extension-specific UI (PostGIS map view, pgvector similarity search)
+*Goal: Make it feel fast, professional, and keyboard-native*
 
-### Role & Permission Manager
-- [ ] Visual role hierarchy
-- [ ] Grant/revoke permissions via UI
-- [ ] Row-level security policy editor
-- [ ] Audit role permissions
+### Command Palette (High Impact)
+- [ ] Cmd+K to open command palette
+- [ ] Fuzzy search all actions, tables, databases
+- [ ] Recent commands history
+- [ ] Context-aware suggestions
 
-### Query Builder
-- [ ] Visual query builder for non-SQL users
-- [ ] JOIN visualization
-- [ ] Drag-and-drop table selection
+### Dark Mode
+- [ ] System preference detection
+- [ ] Manual toggle
+- [ ] Consistent theming across all components
 
-### Data Generation
-- [ ] Generate test data for tables
-- [ ] Faker integration for realistic data
-- [ ] Seed scripts management
+### Keyboard Navigation
+- [ ] Vim-style navigation in table browser (j/k/h/l)
+- [ ] Tab/Shift+Tab through form fields
+- [ ] Escape to close dialogs/cancel
+- [ ] Global shortcuts reference panel (Cmd+?)
 
----
-
-## Phase 4: Team & Workflow (Not Started)
-
-### Project Workspaces
-- [ ] Save cluster + database + query sets as projects
-- [ ] Share project configurations
-
-### SQL Formatting
-- [ ] Auto-format SQL queries
-- [ ] Configurable formatting rules
-
-### Diff Tool
-- [ ] Compare schemas between databases
-- [ ] Compare data between tables
-- [ ] Generate sync scripts
-
-### Notifications
-- [ ] Cluster start/stop notifications
-- [ ] Query completion alerts
-- [ ] Error alerts
-
----
-
-## Technical Improvements
+### Connection Safety
+- [ ] Color-coded connection tabs (red for production)
+- [ ] Environment labels (dev/staging/prod)
+- [ ] Confirmation dialogs for destructive operations on prod
 
 ### Performance
-- [x] Paginated data loading
-- [ ] Lazy loading for large datasets
-- [ ] Query result streaming
-- [ ] Background refresh for stats
-
-### UI/UX
-- [x] Monospace fonts for code/data display
-- [x] Loading states for async operations
-- [x] Status messages and error display
-- [ ] Dark/light theme toggle
-- [ ] Configurable keyboard shortcuts
-- [ ] Resizable panels with memory
-- [ ] Full-text search across all objects
-
-### Platform
-- [ ] System tray integration
-- [ ] Auto-start clusters on app launch
-- [ ] Native file dialogs for backup/restore paths
-- [ ] Drag-and-drop SQL file execution
+- [ ] Lazy loading for large schemas
+- [ ] Virtual scrolling for table data
+- [ ] Background schema refresh
 
 ---
 
-## Out of Scope for MVP
+## Phase 2: Migration Intelligence
 
-- Multi-user collaboration
-- Cloud database support (RDS, Cloud SQL, etc.)
-- BI/charting features
+*Goal: Make schema changes safe and predictable*
+
+### Migration Safety (Key Differentiator)
+- [ ] Lock time estimation before applying changes
+- [ ] Affected queries preview (which queries touch changed columns)
+- [ ] Dependency graph visualization
+- [ ] Auto-generated rollback scripts
+- [ ] "Safe mode" that uses shadow table approach for large tables
+
+### Schema Diff
+- [ ] Side-by-side visual comparison
+- [ ] Color-coded additions/deletions/modifications
+- [ ] Compare: working vs database, database vs database
+- [ ] Export diff as migration SQL
+
+### Migration History
+- [ ] Track applied migrations per database
+- [ ] Migration timeline view
+- [ ] Rollback to previous state
+
+---
+
+## Phase 3: Git-Native Workflow
+
+*Goal: Schema versioning that feels like code versioning*
+
+### Git Integration (Key Differentiator)
+- [ ] Save schema as SQL/YAML files
+- [ ] Initialize git repo for schema
+- [ ] Commit schema changes with messages
+- [ ] Branch support for feature schemas
+- [ ] Visual schema diff between branches
+
+### Schema Snapshots
+- [ ] Save named snapshots locally
+- [ ] Compare current vs snapshot
+- [ ] Restore from snapshot
+
+### Export Formats
+- [ ] Raw SQL (CREATE TABLE statements)
+- [ ] Atlas HCL format
+- [ ] Prisma schema format
+- [ ] YAML representation
+
+---
+
+## Phase 4: Performance-Aware Design
+
+*Goal: Catch performance issues before deployment*
+
+### Index Advisor (Key Differentiator)
+- [ ] Suggest indexes based on table structure
+- [ ] "What if" analysis: preview query plan with proposed index
+- [ ] Detect missing foreign key indexes
+- [ ] Identify unused indexes (connect to pg_stat_user_indexes)
+
+### Query Analysis
+- [ ] Import slow queries from pg_stat_statements
+- [ ] Suggest schema changes to improve specific queries
+- [ ] Visual EXPLAIN with cost breakdown
+
+### Table Health
+- [ ] Table bloat detection
+- [ ] Suggest VACUUM/ANALYZE
+- [ ] Partition recommendations for large tables
+- [ ] TOAST column warnings
+
+---
+
+## Phase 5: AI-Assisted Design
+
+*Goal: Natural language to schema, with intelligence*
+
+### Schema Generation (Key Differentiator)
+- [ ] Describe requirements in natural language
+- [ ] Generate tables, relationships, constraints
+- [ ] Iterative refinement through conversation
+
+### Schema Review
+- [ ] Anti-pattern detection (EAV, missing indexes, etc.)
+- [ ] Normalization analysis (1NF/2NF/3NF violations)
+- [ ] Security suggestions (missing RLS, exposed PII columns)
+
+### Documentation
+- [ ] Auto-generate table/column descriptions
+- [ ] Explain complex queries in plain English
+- [ ] Generate example queries for tables
+
+---
+
+## Phase 6: Postgres-Native Features
+
+*Goal: First-class support for advanced PostgreSQL features*
+
+### Advanced Types
+- [ ] JSONB schema designer with path visualization
+- [ ] Array column support
+- [ ] Enum type management
+- [ ] Composite type editor
+- [ ] Domain type support
+
+### Security
+- [ ] Row Level Security (RLS) policy builder
+- [ ] Visual policy editor
+- [ ] Test policies with sample users
+
+### Functions & Triggers
+- [ ] PL/pgSQL editor with syntax highlighting
+- [ ] Trigger management UI
+- [ ] Function testing interface
+
+### Extensions
+- [ ] Browse available extensions
+- [ ] One-click install/uninstall
+- [ ] Extension-specific UI (PostGIS preview, pgvector)
+
+---
+
+## Phase 7: Code Generation
+
+*Goal: Schema to code, instantly*
+
+### ORM Models
+- [ ] Rust (SQLx structs, Diesel models)
+- [ ] Python (SQLAlchemy models)
+- [ ] TypeScript (Prisma schema, Drizzle)
+
+### Type Definitions
+- [ ] TypeScript interfaces
+- [ ] Rust structs
+- [ ] JSON Schema
+
+### API Stubs
+- [ ] REST endpoint templates
+- [ ] GraphQL schema
+
+---
+
+## Out of Scope
+
+- Multi-user real-time collaboration
+- Cloud database providers (RDS, Cloud SQL) - use connection strings
+- BI/charting/dashboards
 - Scheduled job execution
 - Full pgAdmin feature parity
+
+---
+
+## Priority Matrix
+
+| Feature | Impact | Effort | Priority |
+|---------|--------|--------|----------|
+| Command palette | High | Low | P0 |
+| Dark mode | Medium | Low | P0 |
+| Connection safety (color coding) | High | Low | P0 |
+| Migration lock time estimation | High | Medium | P1 |
+| Schema diff visualization | High | Medium | P1 |
+| Index advisor | High | Medium | P1 |
+| Git integration | High | High | P2 |
+| AI schema generation | High | High | P2 |
+| Anti-pattern detection | Medium | Medium | P2 |
+| JSONB designer | Medium | Medium | P3 |
+| RLS policy builder | Medium | High | P3 |
+| Code generation | Medium | Medium | P3 |
+
+---
+
+## Competitive Positioning
+
+| vs Tool | Our Advantage |
+|---------|---------------|
+| pgAdmin | Native speed, modern UI, keyboard-first |
+| DBeaver | Postgres-optimized, no Java bloat |
+| TablePlus | Migration intelligence, Git workflow, AI assist |
+| DataGrip | Free, lightweight, schema-focused |
+| Navicat | Modern aesthetics, developer workflow |
