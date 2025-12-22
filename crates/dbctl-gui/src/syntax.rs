@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use crate::theme::Theme;
+
 /// SQL keywords for syntax highlighting
 const SQL_KEYWORDS: &[&str] = &[
     // DML
@@ -42,15 +44,15 @@ const SQL_TYPES: &[&str] = &[
 ];
 
 /// Highlight SQL syntax and return a LayoutJob
-pub fn highlight_sql(text: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
+pub fn highlight_sql(text: &str, font_id: egui::FontId, theme: &Theme) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
 
-    let keyword_color = egui::Color32::from_rgb(86, 156, 214);   // Blue
-    let type_color = egui::Color32::from_rgb(78, 201, 176);      // Teal
-    let string_color = egui::Color32::from_rgb(206, 145, 120);   // Orange
-    let number_color = egui::Color32::from_rgb(181, 206, 168);   // Light green
-    let comment_color = egui::Color32::from_rgb(106, 153, 85);   // Green
-    let default_color = egui::Color32::from_rgb(212, 212, 212);  // Light gray
+    let keyword_color = theme.syntax_keyword;
+    let type_color = theme.syntax_type;
+    let string_color = theme.syntax_string;
+    let number_color = theme.syntax_number;
+    let comment_color = theme.syntax_comment;
+    let default_color = theme.syntax_default;
 
     let mut chars = text.chars().peekable();
 

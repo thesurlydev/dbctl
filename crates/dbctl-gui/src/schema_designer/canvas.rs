@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use eframe::egui;
 
 use super::models::{ConstraintType, SchemaModel, TableModel};
+use crate::theme::Theme;
 
 /// Canvas state for rendering and interaction
 #[derive(Clone)]
@@ -65,21 +66,6 @@ const TABLE_PADDING: f32 = 8.0;
 const COLUMN_ICON_WIDTH: f32 = 24.0;
 const CHAR_WIDTH: f32 = 6.6; // Approximate width per character for monospace 11pt font
 
-// Colors
-const COLOR_TABLE_HEADER: egui::Color32 = egui::Color32::from_rgb(66, 133, 244);
-const COLOR_TABLE_HEADER_SELECTED: egui::Color32 = egui::Color32::from_rgb(25, 103, 210);
-const COLOR_TABLE_BG: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);
-const COLOR_TABLE_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(248, 249, 250);
-const COLOR_TABLE_BG_SELECTED: egui::Color32 = egui::Color32::from_rgb(232, 240, 254);
-const COLOR_TABLE_BORDER: egui::Color32 = egui::Color32::from_rgb(218, 220, 224);
-const COLOR_TABLE_BORDER_SELECTED: egui::Color32 = egui::Color32::from_rgb(66, 133, 244);
-const COLOR_FK_LINE: egui::Color32 = egui::Color32::from_rgb(102, 102, 200);
-const COLOR_PK: egui::Color32 = egui::Color32::from_rgb(255, 193, 7);
-const COLOR_FK: egui::Color32 = egui::Color32::from_rgb(156, 39, 176);
-
-fn color_grid() -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(200, 200, 200, 50)
-}
 
 /// Render the schema canvas
 pub fn render_canvas(
@@ -89,6 +75,7 @@ pub fn render_canvas(
     selected_table: &Option<String>,
     selected_column: &Option<(String, String)>,
     visual_column_order: &HashMap<String, Vec<usize>>,
+    theme: &Theme,
 ) -> CanvasResponse {
     let mut response = CanvasResponse::default();
 
@@ -131,7 +118,7 @@ pub fn render_canvas(
 
     // Draw grid if enabled
     if canvas.show_grid {
-        draw_grid(&painter, canvas_rect, canvas);
+        draw_grid(&painter, canvas_rect, canvas, theme);
     }
 
     // Transform function: schema coords -> screen coords
@@ -151,7 +138,7 @@ pub fn render_canvas(
     };
 
     // Draw FK lines first (behind tables)
-    draw_fk_lines(&painter, schema, canvas, &transform, visual_column_order);
+    draw_fk_lines(&painter, schema, canvas, &transform, visual_column_order, theme);
 
     // Reset hover state
     canvas.hovered_table = None;
@@ -205,6 +192,7 @@ pub fn render_canvas(
             is_hovered,
             selected_column,
             column_order,
+            theme,
         );
     }
 
@@ -366,11 +354,11 @@ pub struct CanvasResponse {
     pub deselect: bool,
 }
 
-fn draw_grid(painter: &egui::Painter, rect: egui::Rect, canvas: &CanvasState) {
+fn draw_grid(painter: &egui::Painter, rect: egui::Rect, canvas: &CanvasState, theme: &Theme) {
     let grid_size = canvas.grid_size * canvas.zoom;
     let offset_x = canvas.offset.x * canvas.zoom % grid_size;
     let offset_y = canvas.offset.y * canvas.zoom % grid_size;
-    let grid_color = color_grid();
+    let grid_color = theme.canvas_grid;
 
     let mut x = rect.left() + offset_x;
     while x < rect.right() {
@@ -429,13 +417,6 @@ fn get_table_rect(
     egui::Rect::from_min_size(transform(table.position), egui::vec2(width, height))
 }
 
-// Color for drag indicator
-const COLOR_DRAG_INDICATOR: egui::Color32 = egui::Color32::from_rgb(66, 133, 244);
-
-fn color_dragged_row_bg() -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(66, 133, 244, 40)
-}
-
 fn draw_table(
     painter: &egui::Painter,
     table: &TableModel,
@@ -445,6 +426,7 @@ fn draw_table(
     is_hovered: bool,
     selected_column: &Option<(String, String)>,
     column_order: &[usize],
+    theme: &Theme,
 ) {
     let rect = get_table_rect(table, canvas, transform);
     let header_height = HEADER_HEIGHT * canvas.zoom;
@@ -454,30 +436,30 @@ fn draw_table(
     painter.rect_filled(
         rect.translate(egui::vec2(3.0, 3.0)),
         4.0,
-        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 30),
+        theme.table_shadow,
     );
 
     // Draw body
     let bg_color = if is_selected {
-        COLOR_TABLE_BG_SELECTED
+        theme.table_bg_selected
     } else if is_hovered {
-        COLOR_TABLE_BG_HOVER
+        theme.table_bg_hover
     } else {
-        COLOR_TABLE_BG
+        theme.table_bg
     };
     painter.rect_filled(rect, 4.0, bg_color);
 
     // Draw border
     let border_color = if is_selected {
-        COLOR_TABLE_BORDER_SELECTED
+        theme.table_border_selected
     } else {
-        COLOR_TABLE_BORDER
+        theme.table_border
     };
     painter.rect_stroke(rect, 4.0, egui::Stroke::new(if is_selected { 2.0 } else { 1.0 }, border_color), egui::StrokeKind::Outside);
 
     // Draw header
     let header_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_height));
-    let header_color = if is_selected { COLOR_TABLE_HEADER_SELECTED } else { COLOR_TABLE_HEADER };
+    let header_color = if is_selected { theme.table_header_selected } else { theme.table_header };
     painter.rect_filled(
         header_rect,
         egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 },
@@ -490,7 +472,7 @@ fn draw_table(
         egui::Align2::CENTER_CENTER,
         &table.name,
         egui::FontId::proportional(13.0 * canvas.zoom),
-        egui::Color32::WHITE,
+        theme.text_on_accent,
     );
 
     // Draw collapse indicator
@@ -500,7 +482,7 @@ fn draw_table(
         egui::Align2::CENTER_CENTER,
         collapse_indicator,
         egui::FontId::proportional(12.0 * canvas.zoom),
-        egui::Color32::WHITE,
+        theme.text_on_accent,
     );
 
     // Check if we're dragging a column in this table
@@ -548,7 +530,7 @@ fn draw_table(
 
             // Background for dragged row
             if is_being_dragged {
-                painter.rect_filled(col_rect, 0.0, color_dragged_row_bg());
+                painter.rect_filled(col_rect, 0.0, theme.dragged_row_bg);
             } else {
                 // Highlight selected column
                 let is_col_selected = selected_column
@@ -557,7 +539,7 @@ fn draw_table(
                     .unwrap_or(false);
 
                 if is_col_selected {
-                    painter.rect_filled(col_rect, 0.0, egui::Color32::from_rgb(200, 220, 255));
+                    painter.rect_filled(col_rect, 0.0, theme.column_selected_bg);
                 }
             }
 
@@ -568,7 +550,7 @@ fn draw_table(
                     let line_y = col_rect.top();
                     painter.line_segment(
                         [egui::pos2(rect.left() + 4.0, line_y), egui::pos2(rect.right() - 4.0, line_y)],
-                        egui::Stroke::new(2.0, COLOR_DRAG_INDICATOR),
+                        egui::Stroke::new(2.0, theme.drag_indicator),
                     );
                 }
             }
@@ -583,7 +565,7 @@ fn draw_table(
                     egui::Align2::LEFT_CENTER,
                     "PK",
                     egui::FontId::monospace(9.0 * canvas.zoom),
-                    COLOR_PK,
+                    theme.pk_badge,
                 );
             } else {
                 // Check if this column is a FK
@@ -596,7 +578,7 @@ fn draw_table(
                         egui::Align2::LEFT_CENTER,
                         "FK",
                         egui::FontId::monospace(9.0 * canvas.zoom),
-                        COLOR_FK,
+                        theme.fk_badge,
                     );
                 }
             }
@@ -606,9 +588,9 @@ fn draw_table(
             let nullable_marker = if column.is_nullable { "" } else { "*" };
             let text = format!("{}{}: {}", column.name, nullable_marker, column.data_type);
             let text_color = if is_being_dragged {
-                egui::Color32::from_rgb(100, 100, 100)
+                theme.text_muted
             } else {
-                egui::Color32::BLACK
+                theme.text_primary
             };
             painter.text(
                 egui::pos2(text_x, icon_y),
@@ -625,7 +607,7 @@ fn draw_table(
                 let line_y = header_rect.bottom() + column_order.len() as f32 * row_height;
                 painter.line_segment(
                     [egui::pos2(rect.left() + 4.0, line_y), egui::pos2(rect.right() - 4.0, line_y)],
-                    egui::Stroke::new(2.0, COLOR_DRAG_INDICATOR),
+                    egui::Stroke::new(2.0, theme.drag_indicator),
                 );
             }
         }
@@ -638,6 +620,7 @@ fn draw_fk_lines(
     canvas: &CanvasState,
     transform: &impl Fn(egui::Pos2) -> egui::Pos2,
     visual_column_order: &HashMap<String, Vec<usize>>,
+    theme: &Theme,
 ) {
     for table in schema.tables.values() {
         for constraint in &table.constraints {
@@ -678,7 +661,7 @@ fn draw_fk_lines(
                             let from_pos = get_column_connection_point(table, from_visual_idx, canvas, transform, from_right_side);
                             let to_pos = get_column_connection_point(ref_table, to_visual_idx, canvas, transform, to_right_side);
 
-                            draw_fk_bezier(painter, from_pos, to_pos, COLOR_FK_LINE, from_right_side);
+                            draw_fk_bezier(painter, from_pos, to_pos, theme.fk_line, from_right_side);
                         }
                     }
                 }

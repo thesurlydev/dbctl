@@ -597,6 +597,7 @@ pub fn render_command_palette(app: &mut DbctlApp, ctx: &egui::Context) {
 
     // Semi-transparent backdrop
     let screen_rect = ctx.input(|i| i.viewport_rect());
+    let backdrop_color = app.theme.backdrop;
     let backdrop_response = egui::Area::new(egui::Id::new("command_palette_backdrop"))
         .fixed_pos(screen_rect.min)
         .order(egui::Order::Foreground)
@@ -605,7 +606,7 @@ pub fn render_command_palette(app: &mut DbctlApp, ctx: &egui::Context) {
             ui.painter().rect_filled(
                 screen_rect,
                 0.0,
-                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128),
+                backdrop_color,
             );
             response
         });
@@ -675,13 +676,13 @@ pub fn render_command_palette(app: &mut DbctlApp, ctx: &egui::Context) {
                         let is_selected = idx == app.command_palette.selected_index;
 
                         let bg_color = if is_selected {
-                            egui::Color32::from_rgb(60, 100, 180)
+                            app.theme.selection_bg
                         } else {
                             egui::Color32::TRANSPARENT
                         };
 
                         let text_color = if is_selected {
-                            egui::Color32::WHITE
+                            app.theme.text_on_accent
                         } else {
                             ui.visuals().text_color()
                         };

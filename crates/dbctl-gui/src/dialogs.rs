@@ -71,7 +71,7 @@ pub fn render_create_cluster_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
                 });
 
             if app.installed_versions.is_empty() {
-                ui.colored_label(egui::Color32::RED, "No PostgreSQL versions installed!");
+                ui.colored_label(app.theme.warning, "No PostgreSQL versions installed!");
             }
 
             ui.separator();
@@ -112,7 +112,7 @@ pub fn render_remove_cluster_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
                 "Are you sure you want to remove cluster '{}'?",
                 cluster_name
             ));
-            ui.colored_label(egui::Color32::RED, "This will delete all data!");
+            ui.colored_label(app.theme.warning, "This will delete all data!");
 
             ui.separator();
 
@@ -147,7 +147,7 @@ pub fn render_drop_db_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
                 "Are you sure you want to drop database '{}'?",
                 db_name
             ));
-            ui.colored_label(egui::Color32::RED, "This cannot be undone!");
+            ui.colored_label(app.theme.warning, "This cannot be undone!");
 
             ui.separator();
 
@@ -184,12 +184,12 @@ pub fn render_add_connection_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
                 match result {
                     Ok(version) => {
                         ui.colored_label(
-                            egui::Color32::GREEN,
+                            app.theme.success,
                             format!("Connected: {}", version),
                         );
                     }
                     Err(e) => {
-                        ui.colored_label(egui::Color32::RED, format!("Failed: {}", e));
+                        ui.colored_label(app.theme.warning, format!("Failed: {}", e));
                     }
                 }
                 ui.separator();
@@ -278,12 +278,12 @@ pub fn render_edit_connection_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
                 match result {
                     Ok(version) => {
                         ui.colored_label(
-                            egui::Color32::GREEN,
+                            app.theme.success,
                             format!("Connected: {}", version),
                         );
                     }
                     Err(e) => {
-                        ui.colored_label(egui::Color32::RED, format!("Failed: {}", e));
+                        ui.colored_label(app.theme.warning, format!("Failed: {}", e));
                     }
                 }
                 ui.separator();

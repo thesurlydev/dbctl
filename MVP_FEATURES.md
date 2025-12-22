@@ -58,15 +58,15 @@ A PostgreSQL-first schema tool that's fast, keyboard-driven, and understands you
 *Goal: Make it feel fast, professional, and keyboard-native*
 
 ### Command Palette (High Impact)
-- [ ] Cmd+K to open command palette
-- [ ] Fuzzy search all actions, tables, databases
+- [x] Cmd+K to open command palette
+- [x] Fuzzy search all actions, tables, databases
 - [ ] Recent commands history
 - [ ] Context-aware suggestions
 
 ### Dark Mode
-- [ ] System preference detection
-- [ ] Manual toggle
-- [ ] Consistent theming across all components
+- [x] System preference detection
+- [x] Manual toggle (View > Theme menu)
+- [x] Consistent theming across all components
 
 ### Keyboard Navigation
 - [ ] Vim-style navigation in table browser (j/k/h/l)
@@ -240,8 +240,8 @@ A PostgreSQL-first schema tool that's fast, keyboard-driven, and understands you
 
 | Feature | Impact | Effort | Priority |
 |---------|--------|--------|----------|
-| Command palette | High | Low | P0 |
-| Dark mode | Medium | Low | P0 |
+| Command palette | High | Low | Done |
+| Dark mode | Medium | Low | Done |
 | Connection safety (color coding) | High | Low | P0 |
 | Migration lock time estimation | High | Medium | P1 |
 | Schema diff visualization | High | Medium | P1 |

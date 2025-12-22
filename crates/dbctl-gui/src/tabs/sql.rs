@@ -139,8 +139,9 @@ pub fn render_sql_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterIn
     // Query text area with syntax highlighting
     {
         let font_id = egui::FontId::monospace(14.0);
+        let theme = &app.theme;
         let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-            let mut job = highlight_sql(text.as_str(), font_id.clone());
+            let mut job = highlight_sql(text.as_str(), font_id.clone(), theme);
             job.wrap.max_width = wrap_width;
             ui.fonts_mut(|f| f.layout_job(job))
         };

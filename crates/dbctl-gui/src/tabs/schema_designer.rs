@@ -109,6 +109,7 @@ pub fn render_schema_designer_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster
                     &app.schema_designer.selected_table,
                     &app.schema_designer.selected_column,
                     &app.schema_designer.visual_column_order,
+                    &app.theme,
                 );
 
                 // Handle canvas responses

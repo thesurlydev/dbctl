@@ -6,6 +6,7 @@ mod state;
 mod syntax;
 mod table_browser;
 mod tabs;
+pub mod theme;
 
 use std::sync::mpsc;
 
@@ -15,6 +16,7 @@ use schema_designer::SchemaDesignerState;
 use sql_state::SqlState;
 use state::{ActiveConnection, AsyncResult, ClusterInfo, ConnectionInfo, Tab};
 use table_browser::TableBrowserState;
+use theme::{GuiConfig, Theme, ThemeMode};
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -112,6 +114,11 @@ pub struct DbctlApp {
 
     // Command palette
     pub command_palette: command_palette::CommandPaletteState,
+
+    // Theme
+    pub theme_mode: ThemeMode,
+    pub theme: Theme,
+    theme_applied: bool,
 }
 
 impl DbctlApp {
@@ -121,6 +128,11 @@ impl DbctlApp {
 
         // Load saved connections
         let connections = Self::load_connections();
+
+        // Load theme preference
+        let gui_config = GuiConfig::load();
+        let theme_mode = gui_config.theme_mode;
+        let theme = Theme::from_mode(theme_mode);
 
         let mut app = Self {
             clusters: Vec::new(),
@@ -175,6 +187,9 @@ impl DbctlApp {
             result_rx,
             result_tx,
             command_palette: command_palette::CommandPaletteState::default(),
+            theme_mode,
+            theme,
+            theme_applied: false,
         };
 
         app.refresh_clusters();
@@ -310,6 +325,17 @@ impl DbctlApp {
 
     pub fn selected_cluster(&self) -> Option<&ClusterInfo> {
         self.selected_cluster.and_then(|i| self.clusters.get(i))
+    }
+
+    /// Set the theme mode and persist preference
+    pub fn set_theme(&mut self, mode: ThemeMode) {
+        self.theme_mode = mode;
+        self.theme = Theme::from_mode(mode);
+        self.theme_applied = false; // Trigger re-apply on next frame
+
+        // Persist the preference
+        let config = GuiConfig { theme_mode: mode };
+        config.save();
     }
 
     pub fn fetch_databases(&mut self, cluster: &str) {
@@ -1235,6 +1261,17 @@ impl DbctlApp {
 
 impl eframe::App for DbctlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Apply theme visuals (only when changed or on first frame)
+        if !self.theme_applied {
+            let visuals = if self.theme.is_dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            };
+            ctx.set_visuals(visuals);
+            self.theme_applied = true;
+        }
+
         self.process_async_results();
 
         // Global keyboard shortcuts
@@ -1269,6 +1306,23 @@ impl eframe::App for DbctlApp {
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
+                });
+
+                ui.menu_button("View", |ui| {
+                    ui.menu_button("Theme", |ui| {
+                        if ui.radio_value(&mut self.theme_mode, ThemeMode::Light, "Light").clicked() {
+                            self.set_theme(ThemeMode::Light);
+                            ui.close();
+                        }
+                        if ui.radio_value(&mut self.theme_mode, ThemeMode::Dark, "Dark").clicked() {
+                            self.set_theme(ThemeMode::Dark);
+                            ui.close();
+                        }
+                        if ui.radio_value(&mut self.theme_mode, ThemeMode::System, "System").clicked() {
+                            self.set_theme(ThemeMode::System);
+                            ui.close();
+                        }
+                    });
                 });
             });
         });
@@ -1447,9 +1501,9 @@ impl eframe::App for DbctlApp {
                         ui.separator();
 
                         if cluster.running {
-                            ui.label(egui::RichText::new("Running").color(egui::Color32::GREEN));
+                            ui.label(egui::RichText::new("Running").color(self.theme.status_running));
                         } else {
-                            ui.label(egui::RichText::new("Stopped").color(egui::Color32::RED));
+                            ui.label(egui::RichText::new("Stopped").color(self.theme.status_stopped));
                         }
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
