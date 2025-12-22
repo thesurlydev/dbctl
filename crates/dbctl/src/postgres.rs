@@ -6,6 +6,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
+use crate::connection::{connect, ConnectionSource};
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum GrantTarget {
     Database,
@@ -283,21 +285,12 @@ pub async fn handle_action(action: DbAction) -> Result<()> {
     Ok(())
 }
 
-pub async fn create_database(cluster: &str, database: &str) -> Result<()> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("Connection error: {}", e);
-        }
-    });
+/// Create database using a connection source
+pub async fn create_database_with_source(
+    source: &ConnectionSource,
+    database: &str,
+) -> Result<bool> {
+    let (client, _handle) = connect(source, Some("postgres")).await?;
 
     // Check if exists
     let row = client
@@ -305,37 +298,35 @@ pub async fn create_database(cluster: &str, database: &str) -> Result<()> {
         .await;
 
     if row.is_ok() {
-        println!(
-            "Database '{}' already exists in cluster '{}'",
-            database, cluster
-        );
-        return Ok(());
+        return Ok(false); // Already exists
     }
 
     // Create database
     let query = format!("CREATE DATABASE {}", database);
     client.batch_execute(&query).await?;
 
-    println!("✓ Created database '{}' in cluster '{}'", database, cluster);
+    Ok(true) // Created successfully
+}
+
+pub async fn create_database(cluster: &str, database: &str) -> Result<()> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    let created = create_database_with_source(&source, database).await?;
+
+    if created {
+        println!("✓ Created database '{}' in cluster '{}'", database, cluster);
+    } else {
+        println!(
+            "Database '{}' already exists in cluster '{}'",
+            database, cluster
+        );
+    }
 
     Ok(())
 }
 
-pub async fn drop_database(cluster: &str, database: &str) -> Result<()> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("Connection error: {}", e);
-        }
-    });
+/// Drop database using a connection source
+pub async fn drop_database_with_source(source: &ConnectionSource, database: &str) -> Result<()> {
+    let (client, _handle) = connect(source, Some("postgres")).await?;
 
     // Terminate connections
     let terminate_query = format!(
@@ -348,6 +339,13 @@ pub async fn drop_database(cluster: &str, database: &str) -> Result<()> {
     let query = format!("DROP DATABASE IF EXISTS {}", database);
     client.batch_execute(&query).await?;
 
+    Ok(())
+}
+
+pub async fn drop_database(cluster: &str, database: &str) -> Result<()> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    drop_database_with_source(&source, database).await?;
+
     println!(
         "✓ Dropped database '{}' from cluster '{}'",
         database, cluster
@@ -356,21 +354,9 @@ pub async fn drop_database(cluster: &str, database: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn list_databases(cluster: &str) -> Result<Vec<String>> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("Connection error: {}", e);
-        }
-    });
+/// List databases using a connection source (works with both clusters and remote connections)
+pub async fn list_databases_with_source(source: &ConnectionSource) -> Result<Vec<String>> {
+    let (client, _handle) = connect(source, Some("postgres")).await?;
 
     let rows = client
         .query(
@@ -381,6 +367,11 @@ pub async fn list_databases(cluster: &str) -> Result<Vec<String>> {
 
     let databases: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
     Ok(databases)
+}
+
+pub async fn list_databases(cluster: &str) -> Result<Vec<String>> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    list_databases_with_source(&source).await
 }
 
 async fn print_databases(cluster: &str) -> Result<()> {
@@ -696,21 +687,9 @@ pub async fn create_user(
     Ok(())
 }
 
-pub async fn list_users(cluster: &str) -> Result<Vec<UserInfo>> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("Connection error: {}", e);
-        }
-    });
+/// List users using a connection source
+pub async fn list_users_with_source(source: &ConnectionSource) -> Result<Vec<UserInfo>> {
+    let (client, _handle) = connect(source, Some("postgres")).await?;
 
     let rows = client
         .query(
@@ -730,6 +709,11 @@ pub async fn list_users(cluster: &str) -> Result<Vec<UserInfo>> {
         .collect();
 
     Ok(users)
+}
+
+pub async fn list_users(cluster: &str) -> Result<Vec<UserInfo>> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    list_users_with_source(&source).await
 }
 
 async fn print_users(cluster: &str) -> Result<()> {
@@ -981,21 +965,9 @@ pub struct TableDataResult {
     pub page_size: usize,
 }
 
-pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("Connection error: {}", e);
-        }
-    });
+/// Get cluster stats using a connection source
+pub async fn get_cluster_stats_with_source(source: &ConnectionSource) -> Result<ClusterStats> {
+    let (client, _handle) = connect(source, Some("postgres")).await?;
 
     let db_count_row = client
         .query_one(
@@ -1024,18 +996,8 @@ pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
     for db_row in databases {
         let dbname: String = db_row.get(0);
 
-        let db_conn_str = format!(
-            "host=localhost port={} user={} dbname={}",
-            metadata.port, metadata.username, dbname
-        );
-
-        if let Ok((db_client, db_connection)) =
-            tokio_postgres::connect(&db_conn_str, tokio_postgres::NoTls).await
-        {
-            tokio::spawn(async move {
-                let _ = db_connection.await;
-            });
-
+        // Connect to each database to count tables
+        if let Ok((db_client, _db_handle)) = connect(source, Some(&dbname)).await {
             if let Ok(table_row) = db_client
                 .query_one(
                     "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
@@ -1054,6 +1016,11 @@ pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
         user_count,
         table_count,
     })
+}
+
+pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    get_cluster_stats_with_source(&source).await
 }
 
 async fn show_privileges(cluster: &str, database: &str, user: &str) -> Result<()> {
@@ -1163,18 +1130,12 @@ async fn show_privileges(cluster: &str, database: &str, user: &str) -> Result<()
 // Table Browser Functions
 // ============================================
 
-/// List all schemas in a database
-pub async fn list_schemas(cluster: &str, database: &str) -> Result<Vec<SchemaInfo>> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+/// List all schemas using a connection source
+pub async fn list_schemas_with_source(
+    source: &ConnectionSource,
+    database: &str,
+) -> Result<Vec<SchemaInfo>> {
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     let rows = client
         .query(
@@ -1197,18 +1158,19 @@ pub async fn list_schemas(cluster: &str, database: &str) -> Result<Vec<SchemaInf
         .collect())
 }
 
-/// List all tables in a schema
-pub async fn list_tables(cluster: &str, database: &str, schema: &str) -> Result<Vec<TableInfo>> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
+/// List all schemas in a database
+pub async fn list_schemas(cluster: &str, database: &str) -> Result<Vec<SchemaInfo>> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    list_schemas_with_source(&source, database).await
+}
 
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+/// List all tables using a connection source
+pub async fn list_tables_with_source(
+    source: &ConnectionSource,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<TableInfo>> {
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     let rows = client
         .query(
@@ -1237,23 +1199,20 @@ pub async fn list_tables(cluster: &str, database: &str, schema: &str) -> Result<
         .collect())
 }
 
-/// Get complete table structure (columns, constraints, indexes)
-pub async fn get_table_structure(
-    cluster: &str,
+/// List all tables in a schema
+pub async fn list_tables(cluster: &str, database: &str, schema: &str) -> Result<Vec<TableInfo>> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    list_tables_with_source(&source, database, schema).await
+}
+
+/// Get table structure using a connection source
+pub async fn get_table_structure_with_source(
+    source: &ConnectionSource,
     database: &str,
     schema: &str,
     table: &str,
 ) -> Result<TableStructure> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     // Get primary key columns first
     let pk_rows = client
@@ -1279,7 +1238,26 @@ pub async fn get_table_structure(
         .query(
             "SELECT
                 column_name,
-                data_type,
+                CASE
+                    WHEN data_type = 'character varying' THEN
+                        CASE WHEN character_maximum_length IS NOT NULL
+                            THEN 'varchar(' || character_maximum_length || ')'
+                            ELSE 'varchar'
+                        END
+                    WHEN data_type = 'character' THEN
+                        CASE WHEN character_maximum_length IS NOT NULL
+                            THEN 'char(' || character_maximum_length || ')'
+                            ELSE 'char'
+                        END
+                    WHEN data_type = 'numeric' THEN
+                        CASE WHEN numeric_precision IS NOT NULL AND numeric_scale IS NOT NULL
+                            THEN 'numeric(' || numeric_precision || ',' || numeric_scale || ')'
+                            WHEN numeric_precision IS NOT NULL
+                            THEN 'numeric(' || numeric_precision || ')'
+                            ELSE 'numeric'
+                        END
+                    ELSE data_type
+                END as data_type,
                 is_nullable = 'YES' as is_nullable,
                 column_default,
                 ordinal_position::int4
@@ -1381,25 +1359,27 @@ pub async fn get_table_structure(
     })
 }
 
-/// Get paginated table data
-pub async fn get_table_data(
+/// Get complete table structure (columns, constraints, indexes)
+pub async fn get_table_structure(
     cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+) -> Result<TableStructure> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    get_table_structure_with_source(&source, database, schema, table).await
+}
+
+/// Get paginated table data using a connection source
+pub async fn get_table_data_with_source(
+    source: &ConnectionSource,
     database: &str,
     schema: &str,
     table: &str,
     page: usize,
     page_size: usize,
 ) -> Result<TableDataResult> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     // Get total row count
     let count_query = format!(
@@ -1454,6 +1434,19 @@ pub async fn get_table_data(
     })
 }
 
+/// Get paginated table data
+pub async fn get_table_data(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    page: usize,
+    page_size: usize,
+) -> Result<TableDataResult> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    get_table_data_with_source(&source, database, schema, table, page, page_size).await
+}
+
 /// Helper to convert PostgreSQL values to strings
 fn convert_pg_value_to_string(row: &tokio_postgres::Row, idx: usize) -> Option<String> {
     // Try common types in order of likelihood
@@ -1482,24 +1475,15 @@ fn convert_pg_value_to_string(row: &tokio_postgres::Row, idx: usize) -> Option<S
     Some("[unsupported type]".to_string())
 }
 
-/// Insert a new row into a table
-pub async fn insert_row(
-    cluster: &str,
+/// Insert a new row using a connection source
+pub async fn insert_row_with_source(
+    source: &ConnectionSource,
     database: &str,
     schema: &str,
     table: &str,
     values: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     let columns: Vec<&str> = values.keys().map(|s| s.as_str()).collect();
 
@@ -1536,9 +1520,21 @@ pub async fn insert_row(
     Ok(())
 }
 
-/// Update a specific cell in a table
-pub async fn update_cell(
+/// Insert a new row into a table
+pub async fn insert_row(
     cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    values: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    insert_row_with_source(&source, database, schema, table, values).await
+}
+
+/// Update a specific cell using a connection source
+pub async fn update_cell_with_source(
+    source: &ConnectionSource,
     database: &str,
     schema: &str,
     table: &str,
@@ -1547,16 +1543,7 @@ pub async fn update_cell(
     column: &str,
     new_value: Option<&str>,
 ) -> Result<()> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
-
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     // Use SQL literals for the new value to allow PostgreSQL type coercion
     // Use parameterized query only for pk_value (cast to text for comparison)
@@ -1588,25 +1575,31 @@ pub async fn update_cell(
     Ok(())
 }
 
-/// Delete a row from a table
-pub async fn delete_row(
+/// Update a specific cell in a table
+pub async fn update_cell(
     cluster: &str,
     database: &str,
     schema: &str,
     table: &str,
     pk_column: &str,
     pk_value: &str,
+    column: &str,
+    new_value: Option<&str>,
 ) -> Result<()> {
-    let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
+    let source = ConnectionSource::from_cluster(cluster)?;
+    update_cell_with_source(&source, database, schema, table, pk_column, pk_value, column, new_value).await
+}
 
-    let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
+/// Delete a row using a connection source
+pub async fn delete_row_with_source(
+    source: &ConnectionSource,
+    database: &str,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    pk_value: &str,
+) -> Result<()> {
+    let (client, _handle) = connect(source, Some(database)).await?;
 
     let query = format!(
         "DELETE FROM \"{}\".\"{}\" WHERE \"{}\"::text = $1",
@@ -1616,6 +1609,59 @@ pub async fn delete_row(
     );
 
     client.execute(&query, &[&pk_value]).await?;
+    Ok(())
+}
+
+/// Delete a row from a table
+pub async fn delete_row(
+    cluster: &str,
+    database: &str,
+    schema: &str,
+    table: &str,
+    pk_column: &str,
+    pk_value: &str,
+) -> Result<()> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    delete_row_with_source(&source, database, schema, table, pk_column, pk_value).await
+}
+
+/// Execute migration statements in a transaction
+pub async fn execute_migration(
+    cluster: &str,
+    database: &str,
+    statements: &[String],
+) -> Result<()> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    execute_migration_with_source(&source, database, statements).await
+}
+
+/// Execute migration statements in a transaction (with connection source)
+pub async fn execute_migration_with_source(
+    source: &ConnectionSource,
+    database: &str,
+    statements: &[String],
+) -> Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+
+    let (client, _handle) = connect(source, Some(database)).await?;
+
+    // Start transaction
+    client.batch_execute("BEGIN;").await?;
+
+    // Execute each statement
+    for stmt in statements {
+        if let Err(e) = client.batch_execute(stmt).await {
+            // Rollback on error
+            client.batch_execute("ROLLBACK;").await.ok();
+            bail!("Migration failed at:\n{}\n\nError: {}", stmt, e);
+        }
+    }
+
+    // Commit transaction
+    client.batch_execute("COMMIT;").await?;
+
     Ok(())
 }
 
