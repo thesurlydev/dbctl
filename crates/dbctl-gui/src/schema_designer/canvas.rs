@@ -732,11 +732,11 @@ fn draw_fk_bezier(
         painter.line_segment([window[0], window[1]], egui::Stroke::new(2.0, color));
     }
 
-    // Draw arrow at end
-    draw_arrow_head(painter, points[points.len() - 2], to, color);
+    // Draw "one" indicator at the referenced (PK) end - perpendicular line
+    draw_one_indicator(painter, points[points.len() - 2], to, color);
 
-    // Draw circle at start
-    painter.circle_filled(from, 4.0, color);
+    // Draw crow's foot at the FK (many) end
+    draw_crows_foot(painter, points[1], from, color, from_right_side);
 }
 
 fn bezier_points(
@@ -762,7 +762,8 @@ fn bezier_points(
     points
 }
 
-fn draw_arrow_head(
+/// Draw a "one" indicator (perpendicular line) at the PK/referenced end
+fn draw_one_indicator(
     painter: &egui::Painter,
     from: egui::Pos2,
     to: egui::Pos2,
@@ -771,15 +772,66 @@ fn draw_arrow_head(
     let dir = (to - from).normalized();
     let perp = egui::vec2(-dir.y, dir.x);
 
-    let arrow_size = 8.0;
-    let p1 = to - dir * arrow_size + perp * (arrow_size * 0.5);
-    let p2 = to - dir * arrow_size - perp * (arrow_size * 0.5);
+    let bar_size = 8.0;
+    let bar_offset = 4.0; // Distance from endpoint
 
-    painter.add(egui::Shape::convex_polygon(
-        vec![to, p1, p2],
-        color,
-        egui::Stroke::NONE,
-    ));
+    // Draw perpendicular line (the "one" indicator)
+    let bar_center = to - dir * bar_offset;
+    let bar_p1 = bar_center + perp * bar_size;
+    let bar_p2 = bar_center - perp * bar_size;
+    painter.line_segment([bar_p1, bar_p2], egui::Stroke::new(2.0, color));
+}
+
+/// Draw a crow's foot (three-pronged fork) at the FK/many end
+fn draw_crows_foot(
+    painter: &egui::Painter,
+    next_point: egui::Pos2,
+    endpoint: egui::Pos2,
+    color: egui::Color32,
+    from_right_side: bool,
+) {
+    // Direction pointing INTO the table (away from the curve)
+    let outward_dir = if from_right_side {
+        egui::vec2(-1.0, 0.0)
+    } else {
+        egui::vec2(1.0, 0.0)
+    };
+
+    let perp = egui::vec2(0.0, 1.0);
+    let foot_length = 10.0;
+    let foot_spread = 8.0;
+
+    // The crow's foot prongs spread from a point slightly away from the table edge
+    let fork_origin = endpoint + outward_dir * foot_length;
+
+    // Draw the three prongs of the crow's foot
+    // Center prong (straight to table)
+    painter.line_segment(
+        [fork_origin, endpoint],
+        egui::Stroke::new(2.0, color),
+    );
+
+    // Upper prong
+    let upper_end = endpoint + perp * foot_spread;
+    painter.line_segment(
+        [fork_origin, upper_end],
+        egui::Stroke::new(2.0, color),
+    );
+
+    // Lower prong
+    let lower_end = endpoint - perp * foot_spread;
+    painter.line_segment(
+        [fork_origin, lower_end],
+        egui::Stroke::new(2.0, color),
+    );
+
+    // Draw a small perpendicular line near the crow's foot to indicate "zero or more" vs "one or more"
+    // This shows a ring (optional) - we'll use a small circle for the "zero" indicator
+    let ring_pos = fork_origin + outward_dir * 6.0;
+    painter.circle_stroke(ring_pos, 4.0, egui::Stroke::new(1.5, color));
+
+    // Suppress unused variable warning
+    let _ = next_point;
 }
 
 /// Auto-layout tables in a grid pattern
