@@ -323,11 +323,6 @@ fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) 
             auto_layout_tables(&mut app.schema_designer.working_schema);
         }
 
-        ui.separator();
-
-        ui.checkbox(&mut app.schema_designer.canvas.show_grid, "Grid");
-        ui.checkbox(&mut app.schema_designer.canvas.snap_to_grid, "Snap");
-
         // Right side - AI toggle, History, Properties, and DDL
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ai_button_text = if app.ai_chat.visible { "Hide AI" } else { "AI Assistant" };

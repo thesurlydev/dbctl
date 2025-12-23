@@ -1,6 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 /// Main application tabs
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub enum Tab {
+    #[default]
     Overview,
     Databases,
     Users,

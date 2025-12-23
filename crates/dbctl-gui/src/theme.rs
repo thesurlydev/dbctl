@@ -222,6 +222,15 @@ pub fn detect_system_dark_mode() -> bool {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GuiConfig {
     pub theme_mode: ThemeMode,
+    /// Last selected cluster name (for restoring session)
+    #[serde(default)]
+    pub last_cluster: Option<String>,
+    /// Last active tab (for restoring session)
+    #[serde(default)]
+    pub last_tab: Option<crate::state::Tab>,
+    /// Last selected database name (for restoring session)
+    #[serde(default)]
+    pub last_database: Option<String>,
 }
 
 impl GuiConfig {

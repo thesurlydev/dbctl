@@ -142,6 +142,10 @@ pub struct DbctlApp {
     pub theme: Theme,
     theme_applied: bool,
 
+    // GUI config (for session persistence)
+    pub gui_config: GuiConfig,
+    session_restored: bool,
+
     // AI Chat
     pub ai_chat: ai_chat::AiChatState,
     pub ai_config: ai_chat::AiConfig,
@@ -157,10 +161,11 @@ impl DbctlApp {
         // Load saved connections
         let connections = Self::load_connections();
 
-        // Load theme preference
+        // Load GUI config (theme, session state)
         let gui_config = GuiConfig::load();
         let theme_mode = gui_config.theme_mode;
         let theme = Theme::from_mode(theme_mode);
+        let initial_tab = gui_config.last_tab.clone().unwrap_or_default();
 
         // Load AI config
         let ai_config = ai_chat::AiConfig::load();
@@ -187,7 +192,7 @@ impl DbctlApp {
             test_connection_result: None,
             testing_connection: false,
 
-            current_tab: Tab::Overview,
+            current_tab: initial_tab,
             databases: Vec::new(),
             selected_database: None,
             new_db_name: String::new(),
@@ -221,6 +226,8 @@ impl DbctlApp {
             theme_mode,
             theme,
             theme_applied: false,
+            gui_config,
+            session_restored: false,
             ai_chat: ai_chat::AiChatState::new(),
             ai_config,
             show_api_key_dialog: false,
@@ -337,11 +344,46 @@ impl DbctlApp {
                 for name in running_clusters {
                     self.fetch_cluster_stats(&name);
                 }
+
+                // Restore session on first load
+                if !self.session_restored {
+                    self.restore_session();
+                }
             }
             Err(e) => {
                 self.status_message = format!("Error: {}", e);
             }
         }
+    }
+
+    /// Restore session state from saved config (cluster, tab, database)
+    fn restore_session(&mut self) {
+        self.session_restored = true;
+
+        // Restore last cluster by name
+        if let Some(ref cluster_name) = self.gui_config.last_cluster {
+            if let Some(i) = self.clusters.iter().position(|c| &c.name == cluster_name) {
+                self.selected_cluster = Some(i);
+                self.active_connection = ActiveConnection::Cluster(i);
+
+                // Fetch data for the cluster if running
+                if let Some(cluster) = self.clusters.get(i).cloned() {
+                    if cluster.running {
+                        self.fetch_databases(&cluster.name);
+                        self.fetch_users(&cluster.name);
+                    }
+                    self.refresh_logs(&cluster.name);
+                }
+            }
+        }
+
+        // Restore last tab (already set in new() but may have been overridden)
+        if let Some(ref tab) = self.gui_config.last_tab {
+            self.current_tab = tab.clone();
+        }
+
+        // Note: Database restoration happens after databases are loaded
+        // via process_async_results -> AsyncResult::Databases
     }
 
     pub fn refresh_installed_versions(&mut self) {
@@ -369,8 +411,26 @@ impl DbctlApp {
         self.theme_applied = false; // Trigger re-apply on next frame
 
         // Persist the preference
-        let config = GuiConfig { theme_mode: mode };
-        config.save();
+        self.gui_config.theme_mode = mode;
+        self.gui_config.save();
+    }
+
+    /// Save current session state (cluster, tab, database) for restoration on next launch
+    pub fn save_session(&mut self) {
+        // Save current cluster name
+        self.gui_config.last_cluster = self.selected_cluster().map(|c| c.name.clone());
+
+        // Save current tab
+        self.gui_config.last_tab = Some(self.current_tab.clone());
+
+        // Save current database (prefer schema designer, then table browser)
+        self.gui_config.last_database = self
+            .schema_designer
+            .selected_database
+            .clone()
+            .or_else(|| self.table_browser.selected_database.clone());
+
+        self.gui_config.save();
     }
 
     pub fn fetch_databases(&mut self, cluster: &str) {
@@ -533,6 +593,9 @@ impl DbctlApp {
         self.schema_designer.selected_schema = schema.to_string();
 
         self.spawn_schema_load(cluster, database, schema);
+
+        // Save session with new database selection
+        self.save_session();
     }
 
     /// Reload schema after migration - preserves action history
@@ -825,6 +888,17 @@ impl DbctlApp {
                             let tab = self.sql_state.current_tab_mut();
                             if tab.database.is_empty() {
                                 tab.database = self.databases[0].clone();
+                            }
+                        }
+
+                        // Restore last database on session restore
+                        if self.schema_designer.selected_database.is_none() {
+                            if let Some(db_name) = self.gui_config.last_database.clone() {
+                                if self.databases.contains(&db_name) {
+                                    self.schema_designer.selected_database = Some(db_name.clone());
+                                    self.schema_designer.selected_schema = "public".to_string();
+                                    self.spawn_schema_load(&cluster, &db_name, "public");
+                                }
                             }
                         }
                     }
@@ -1405,6 +1479,9 @@ impl DbctlApp {
 
 impl eframe::App for DbctlApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Track tab at start of frame for session saving
+        let tab_at_frame_start = self.current_tab.clone();
+
         // Apply theme visuals (only when changed or on first frame)
         if !self.theme_applied {
             let visuals = if self.theme.is_dark {
@@ -1528,6 +1605,9 @@ impl eframe::App for DbctlApp {
                             }
                             self.refresh_logs(&cluster.name);
                         }
+
+                        // Save session state
+                        self.save_session();
                     }
 
                     if self.clusters.is_empty() {
@@ -1742,5 +1822,10 @@ impl eframe::App for DbctlApp {
 
         // Command palette (render last to appear on top)
         command_palette::render_command_palette(self, ctx);
+
+        // Save session if tab changed
+        if self.current_tab != tab_at_frame_start {
+            self.save_session();
+        }
     }
 }
