@@ -10,6 +10,7 @@ pub use diff::{generate_ddl_sql, generate_migration_sql};
 pub use models::{ColumnModel, ConstraintModel, ConstraintType, FkAction, IndexModel, SchemaModel, TableModel};
 pub use templates::{get_all_templates, TemplateCategory};
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Main state for the schema designer tab
@@ -652,5 +653,88 @@ impl SchemaDesignerState {
 
         // If no position found, append at the end
         current_order.len()
+    }
+}
+
+/// Persistent layout cache stored on disk
+/// Maps database name -> (table name -> (x, y) position)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SchemaLayoutCache {
+    /// Layouts per database (database_name -> table_name -> (x, y))
+    pub layouts: HashMap<String, HashMap<String, (f32, f32)>>,
+}
+
+impl SchemaLayoutCache {
+    /// Load layout cache from disk
+    pub fn load() -> Self {
+        let cache_path = Self::cache_path();
+        if let Ok(content) = std::fs::read_to_string(&cache_path) {
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Save layout cache to disk
+    pub fn save(&self) {
+        let cache_path = Self::cache_path();
+        if let Some(parent) = cache_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(cache_path, content);
+        }
+    }
+
+    fn cache_path() -> std::path::PathBuf {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".dbctl")
+            .join("schema-layouts.json")
+    }
+
+    /// Convert from egui::Pos2 HashMap to serializable format
+    pub fn from_layouts(layouts: &HashMap<String, HashMap<String, egui::Pos2>>) -> Self {
+        let mut cache = Self::default();
+        for (db_name, db_layout) in layouts {
+            let mut serializable_layout = HashMap::new();
+            for (table_name, pos) in db_layout {
+                serializable_layout.insert(table_name.clone(), (pos.x, pos.y));
+            }
+            cache.layouts.insert(db_name.clone(), serializable_layout);
+        }
+        cache
+    }
+
+    /// Convert to egui::Pos2 HashMap format
+    pub fn to_layouts(&self) -> HashMap<String, HashMap<String, egui::Pos2>> {
+        let mut result = HashMap::new();
+        for (db_name, db_layout) in &self.layouts {
+            let mut pos_layout = HashMap::new();
+            for (table_name, (x, y)) in db_layout {
+                pos_layout.insert(table_name.clone(), egui::pos2(*x, *y));
+            }
+            result.insert(db_name.clone(), pos_layout);
+        }
+        result
+    }
+
+    /// Update a single database layout
+    pub fn update_database(&mut self, db_name: &str, layout: &HashMap<String, egui::Pos2>) {
+        let mut serializable_layout = HashMap::new();
+        for (table_name, pos) in layout {
+            serializable_layout.insert(table_name.clone(), (pos.x, pos.y));
+        }
+        self.layouts.insert(db_name.to_string(), serializable_layout);
+    }
+
+    /// Get layout for a database as egui::Pos2 HashMap
+    pub fn get_database_layout(&self, db_name: &str) -> Option<HashMap<String, egui::Pos2>> {
+        self.layouts.get(db_name).map(|layout| {
+            layout
+                .iter()
+                .map(|(name, (x, y))| (name.clone(), egui::pos2(*x, *y)))
+                .collect()
+        })
     }
 }

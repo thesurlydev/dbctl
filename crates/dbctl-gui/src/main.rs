@@ -91,6 +91,7 @@ pub struct DbctlApp {
 
     // Schema designer state
     pub schema_designer: SchemaDesignerState,
+    pub layout_cache: schema_designer::SchemaLayoutCache,
 
     // User state
     pub users: Vec<dbctl::UserInfo>,
@@ -170,6 +171,9 @@ impl DbctlApp {
         // Load AI config
         let ai_config = ai_chat::AiConfig::load();
 
+        // Load schema layout cache
+        let layout_cache = schema_designer::SchemaLayoutCache::load();
+
         let mut app = Self {
             clusters: Vec::new(),
             selected_cluster: None,
@@ -198,6 +202,7 @@ impl DbctlApp {
             new_db_name: String::new(),
             table_browser: TableBrowserState::new(),
             schema_designer: SchemaDesignerState::new(),
+            layout_cache: layout_cache.clone(),
             users: Vec::new(),
             new_user_name: String::new(),
             new_user_password: String::new(),
@@ -233,6 +238,9 @@ impl DbctlApp {
             show_api_key_dialog: false,
             api_key_input: String::new(),
         };
+
+        // Populate database_layouts from the loaded cache
+        app.schema_designer.database_layouts = layout_cache.to_layouts();
 
         app.refresh_clusters();
         app.refresh_installed_versions();
@@ -579,9 +587,18 @@ impl DbctlApp {
     }
 
     // Schema designer methods
+
+    /// Save the current schema layout to memory cache and persist to disk
+    fn save_and_persist_layout(&mut self) {
+        self.schema_designer.save_layout_for_database();
+        // Sync the in-memory cache to the persistent cache and save to disk
+        self.layout_cache = schema_designer::SchemaLayoutCache::from_layouts(&self.schema_designer.database_layouts);
+        self.layout_cache.save();
+    }
+
     pub fn load_schema_for_designer(&mut self, cluster: &str, database: &str, schema: &str) {
         // Save the current layout before switching databases
-        self.schema_designer.save_layout_for_database();
+        self.save_and_persist_layout();
 
         self.schema_designer.loading_schema = true;
         self.schema_designer.reset();
@@ -895,6 +912,8 @@ impl DbctlApp {
                         if self.schema_designer.selected_database.is_none() {
                             if let Some(db_name) = self.gui_config.last_database.clone() {
                                 if self.databases.contains(&db_name) {
+                                    // Restore any cached layout for this database
+                                    self.schema_designer.restore_layout_for_database(&db_name);
                                     self.schema_designer.selected_database = Some(db_name.clone());
                                     self.schema_designer.selected_schema = "public".to_string();
                                     self.spawn_schema_load(&cluster, &db_name, "public");
@@ -1596,6 +1615,8 @@ impl eframe::App for DbctlApp {
                         self.users.clear();
                         self.logs_content.clear();
                         self.table_browser.reset();
+                        // Save current layout before resetting (also persists to disk)
+                        self.save_and_persist_layout();
                         self.schema_designer.reset();
 
                         if let Some(cluster) = self.clusters.get(i).cloned() {
@@ -1668,6 +1689,9 @@ impl eframe::App for DbctlApp {
                         self.users.clear();
                         self.logs_content.clear();
                         self.table_browser.reset();
+                        // Save current layout before resetting (also persists to disk)
+                        self.save_and_persist_layout();
+                        self.schema_designer.reset();
 
                         // Fetch databases for this connection (clone to avoid borrow issues)
                         if let Some(profile) = self.connections.get(i).map(|c| c.profile.clone()) {
@@ -1827,5 +1851,10 @@ impl eframe::App for DbctlApp {
         if self.current_tab != tab_at_frame_start {
             self.save_session();
         }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Save the current layout before exiting
+        self.save_and_persist_layout();
     }
 }

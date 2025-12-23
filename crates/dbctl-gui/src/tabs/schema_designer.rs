@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use crate::ai_chat::{MessageRole, SchemaChangeProposal};
+use crate::syntax::highlight_sql;
 use crate::schema_designer::{
     canvas::{auto_layout_tables, layout_new_tables, render_canvas},
     generate_ddl_sql, get_all_templates, ColumnModel, ConstraintModel, FkAction, IndexModel,
@@ -498,13 +499,10 @@ fn render_ddl_panel(app: &DbctlApp, ui: &mut egui::Ui) {
                         .color(egui::Color32::GRAY),
                 );
             } else {
-                // Let the TextEdit size naturally - ScrollArea handles overflow
-                ui.add(
-                    egui::TextEdit::multiline(&mut ddl_text.as_str())
-                        .font(egui::FontId::monospace(12.0))
-                        .desired_width(f32::INFINITY)
-                        .interactive(false),
-                );
+                // Use syntax highlighting for the DDL
+                let layout_job =
+                    highlight_sql(&ddl_text, egui::FontId::monospace(12.0), &app.theme);
+                ui.add(egui::Label::new(layout_job).selectable(true));
             }
         });
 }
