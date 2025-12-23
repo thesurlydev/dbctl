@@ -148,7 +148,18 @@ pub fn render_schema_designer_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster
                 }
                 if let Some((table, column)) = canvas_response.column_clicked {
                     app.schema_designer.selected_table = Some(table.clone());
-                    app.schema_designer.selected_column = Some((table, column));
+                    app.schema_designer.selected_column = Some((table.clone(), column.clone()));
+                    // Populate edit fields for properties panel
+                    if let Some(t) = app.schema_designer.working_schema.tables.get(&table) {
+                        if let Some(col) = t.columns.iter().find(|c| c.name == column) {
+                            app.schema_designer.edit_column_name = col.name.clone();
+                            let (base_type, size) = parse_type_and_size(&col.data_type);
+                            app.schema_designer.edit_column_type = base_type;
+                            app.schema_designer.edit_column_size = size;
+                            app.schema_designer.edit_column_nullable = col.is_nullable;
+                            app.schema_designer.edit_column_default = col.default_value.clone().unwrap_or_default();
+                        }
+                    }
                 }
                 if canvas_response.deselect {
                     app.schema_designer.selected_table = None;
@@ -472,11 +483,12 @@ fn render_ddl_panel(app: &DbctlApp, ui: &mut egui::Ui) {
         &app.schema_designer.selected_schema,
     );
 
-    // Use the stored height minus header space
-    let scroll_height = app.schema_designer.ddl_panel_height - 30.0;
+    // Use all remaining available height
+    let scroll_height = ui.available_height();
 
     egui::ScrollArea::vertical()
         .id_salt("ddl_panel_scroll")
+        .min_scrolled_height(scroll_height)
         .max_height(scroll_height)
         .show(ui, |ui| {
             if ddl_text.is_empty() {
@@ -486,6 +498,7 @@ fn render_ddl_panel(app: &DbctlApp, ui: &mut egui::Ui) {
                         .color(egui::Color32::GRAY),
                 );
             } else {
+                // Let the TextEdit size naturally - ScrollArea handles overflow
                 ui.add(
                     egui::TextEdit::multiline(&mut ddl_text.as_str())
                         .font(egui::FontId::monospace(12.0))
@@ -2065,55 +2078,95 @@ fn render_table_properties_panel(app: &mut DbctlApp, ui: &mut egui::Ui) {
             );
             ui.add_space(4.0);
 
-            // Column list with delete buttons
-            let columns_height = ui.available_height() - 100.0; // Reserve space for add form
+            // Get currently selected column for this table
+            let selected_col_name = app.schema_designer.selected_column
+                .as_ref()
+                .filter(|(t, _)| t == &table_name)
+                .map(|(_, c)| c.clone());
+
+            // Column list with delete buttons - clickable to select
+            let columns_height = ui.available_height() - 200.0; // Reserve space for edit form
             egui::ScrollArea::vertical()
                 .id_salt("properties_columns_scroll")
                 .max_height(columns_height.max(100.0))
                 .show(ui, |ui| {
                     let mut column_to_delete: Option<String> = None;
+                    let mut column_to_select: Option<(String, ColumnModel)> = None;
 
                     for col in &table.columns {
-                        ui.horizontal(|ui| {
-                            // Delete button
-                            if ui.small_button("x")
-                                .on_hover_text(format!("Delete column '{}'", col.name))
-                                .clicked()
-                            {
-                                column_to_delete = Some(col.name.clone());
-                            }
+                        let is_selected = selected_col_name.as_ref() == Some(&col.name);
+                        let is_pk = col.is_primary_key;
 
-                            // Column name and type
-                            let is_pk = col.is_primary_key;
-                            let col_text = if is_pk {
-                                egui::RichText::new(&col.name).strong()
-                            } else {
-                                egui::RichText::new(&col.name)
-                            };
-                            ui.label(col_text);
+                        // Create a frame for the row with selection highlight
+                        let row_bg = if is_selected {
+                            app.theme.column_selected_bg
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
 
-                            ui.label(
-                                egui::RichText::new(&col.data_type)
-                                    .size(11.0)
-                                    .color(app.theme.text_muted),
-                            );
+                        egui::Frame::new()
+                            .fill(row_bg)
+                            .corner_radius(2.0)
+                            .inner_margin(egui::Margin::symmetric(4, 2))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    // Delete button
+                                    if ui.small_button("x")
+                                        .on_hover_text(format!("Delete column '{}'", col.name))
+                                        .clicked()
+                                    {
+                                        column_to_delete = Some(col.name.clone());
+                                    }
 
-                            if is_pk {
-                                ui.label(
-                                    egui::RichText::new("PK")
-                                        .size(10.0)
-                                        .color(app.theme.pk_badge_text),
-                                );
-                            }
+                                    // Column name and type - clickable
+                                    let col_text = if is_pk {
+                                        egui::RichText::new(&col.name).strong()
+                                    } else {
+                                        egui::RichText::new(&col.name)
+                                    };
 
-                            if !col.is_nullable {
-                                ui.label(
-                                    egui::RichText::new("NN")
-                                        .size(10.0)
-                                        .color(app.theme.text_muted),
-                                );
-                            }
-                        });
+                                    let response = ui.add(
+                                        egui::Label::new(col_text).sense(egui::Sense::click())
+                                    );
+                                    if response.clicked() {
+                                        column_to_select = Some((col.name.clone(), col.clone()));
+                                    }
+                                    response.on_hover_text("Click to edit");
+
+                                    ui.label(
+                                        egui::RichText::new(&col.data_type)
+                                            .size(11.0)
+                                            .color(app.theme.text_muted),
+                                    );
+
+                                    if is_pk {
+                                        ui.label(
+                                            egui::RichText::new("PK")
+                                                .size(10.0)
+                                                .color(app.theme.pk_badge_text),
+                                        );
+                                    }
+
+                                    if !col.is_nullable {
+                                        ui.label(
+                                            egui::RichText::new("NN")
+                                                .size(10.0)
+                                                .color(app.theme.text_muted),
+                                        );
+                                    }
+                                });
+                            });
+                    }
+
+                    // Handle column selection - populate edit fields
+                    if let Some((col_name, col)) = column_to_select {
+                        app.schema_designer.selected_column = Some((table_name.clone(), col_name));
+                        let (base_type, size) = parse_type_and_size(&col.data_type);
+                        app.schema_designer.edit_column_name = col.name.clone();
+                        app.schema_designer.edit_column_type = base_type;
+                        app.schema_designer.edit_column_size = size;
+                        app.schema_designer.edit_column_nullable = col.is_nullable;
+                        app.schema_designer.edit_column_default = col.default_value.clone().unwrap_or_default();
                     }
 
                     // Handle column deletion
@@ -2126,11 +2179,141 @@ fn render_table_properties_panel(app: &mut DbctlApp, ui: &mut egui::Ui) {
                             if let Some(t) = app.schema_designer.working_schema.tables.get_mut(&table_name) {
                                 t.columns.retain(|c| c.name != col_name);
                             }
+                            // Clear selection if deleted column was selected
+                            if selected_col_name.as_ref() == Some(&col_name) {
+                                app.schema_designer.selected_column = None;
+                            }
                             app.schema_designer.sync_visual_column_order(&table_name);
                             app.schema_designer.refresh_pending_sql();
                         }
                     }
                 });
+
+            // Edit Column section - appears when a column is selected
+            if let Some(ref selected_col) = selected_col_name {
+                ui.add_space(8.0);
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Edit: {}", selected_col))
+                            .strong()
+                            .size(11.0),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("x").on_hover_text("Deselect").clicked() {
+                            app.schema_designer.selected_column = None;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+
+                // Name field
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.schema_designer.edit_column_name)
+                            .desired_width(120.0),
+                    );
+                });
+
+                // Type field
+                ui.horizontal(|ui| {
+                    ui.label("Type:");
+                    egui::ComboBox::from_id_salt("props_edit_col_type")
+                        .selected_text(&app.schema_designer.edit_column_type)
+                        .width(80.0)
+                        .show_ui(ui, |ui| {
+                            for t in &["integer", "bigint", "smallint", "serial", "bigserial",
+                                      "text", "varchar", "char", "boolean", "timestamp",
+                                      "timestamptz", "date", "time", "uuid", "jsonb", "json",
+                                      "numeric", "decimal", "real", "double precision", "bytea"] {
+                                ui.selectable_value(&mut app.schema_designer.edit_column_type, t.to_string(), *t);
+                            }
+                        });
+
+                    if type_supports_size(&app.schema_designer.edit_column_type) {
+                        ui.label("(");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.schema_designer.edit_column_size)
+                                .desired_width(40.0)
+                                .hint_text("size"),
+                        );
+                        ui.label(")");
+                    }
+                });
+
+                // Nullable checkbox
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut app.schema_designer.edit_column_nullable, "Nullable");
+                });
+
+                // Default value
+                ui.horizontal(|ui| {
+                    ui.label("Default:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.schema_designer.edit_column_default)
+                            .desired_width(120.0)
+                            .hint_text("none"),
+                    );
+                });
+
+                ui.add_space(4.0);
+
+                // Save button
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        // Get the original column
+                        if let Some(t) = app.schema_designer.working_schema.tables.get(&table_name) {
+                            if let Some(old_col) = t.columns.iter().find(|c| c.name == *selected_col).cloned() {
+                                let full_type = combine_type_with_size(
+                                    &app.schema_designer.edit_column_type,
+                                    &app.schema_designer.edit_column_size,
+                                );
+
+                                let new_col = ColumnModel {
+                                    name: app.schema_designer.edit_column_name.trim().to_string(),
+                                    data_type: full_type,
+                                    is_nullable: app.schema_designer.edit_column_nullable,
+                                    default_value: if app.schema_designer.edit_column_default.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(app.schema_designer.edit_column_default.trim().to_string())
+                                    },
+                                    is_primary_key: old_col.is_primary_key,
+                                };
+
+                                // Only apply if something changed
+                                if new_col.name != old_col.name
+                                    || new_col.data_type != old_col.data_type
+                                    || new_col.is_nullable != old_col.is_nullable
+                                    || new_col.default_value != old_col.default_value
+                                {
+                                    app.schema_designer.push_action(SchemaAction::AlterColumn {
+                                        table: table_name.clone(),
+                                        old: old_col.clone(),
+                                        new: new_col.clone(),
+                                    });
+
+                                    // Update the working schema
+                                    if let Some(t) = app.schema_designer.working_schema.tables.get_mut(&table_name) {
+                                        if let Some(col) = t.columns.iter_mut().find(|c| c.name == old_col.name) {
+                                            *col = new_col.clone();
+                                        }
+                                    }
+
+                                    // Update selected column to new name if it changed
+                                    if new_col.name != old_col.name {
+                                        app.schema_designer.selected_column = Some((table_name.clone(), new_col.name.clone()));
+                                    }
+
+                                    app.schema_designer.refresh_pending_sql();
+                                }
+                            }
+                        }
+                    }
+                });
+            }
 
             ui.add_space(8.0);
             ui.separator();
