@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::ai_chat::{ApiKeyManager, MessageRole, SchemaChangeProposal};
+use crate::ai_chat::{MessageRole, SchemaChangeProposal};
 use crate::schema_designer::{
     canvas::{auto_layout_tables, layout_new_tables, render_canvas},
     generate_ddl_sql, get_all_templates, ColumnModel, ConstraintModel, FkAction, IndexModel,
@@ -80,19 +80,29 @@ pub fn render_schema_designer_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster
     // Main content - split between canvas, AI sidebar, and SQL preview
     let available_height = ui.available_height();
     let sql_preview_height = if app.schema_designer.sql_preview_expanded { 150.0 } else { 30.0 };
-    let ddl_panel_height = if app.schema_designer.ddl_panel_expanded { 230.0 } else { 0.0 };
+    // DDL panel height includes the header (30px) + resize handle (6px) + stored scroll height
+    let ddl_panel_height = if app.schema_designer.ddl_panel_expanded {
+        app.schema_designer.ddl_panel_height + 36.0
+    } else {
+        0.0
+    };
     let canvas_height = available_height - sql_preview_height - ddl_panel_height - 10.0;
 
     // Horizontal layout for canvas and sidebars
+    let right_margin = 8.0; // Match left-side padding
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), canvas_height),
+        egui::vec2(ui.available_width() - right_margin, canvas_height),
         egui::Layout::left_to_right(egui::Align::TOP),
         |ui| {
             // Calculate widths for sidebars
             let history_width = if app.schema_designer.history_panel_visible { 280.0 } else { 0.0 };
             let ai_width = if app.ai_chat.visible { app.ai_chat.width } else { 0.0 };
-            let spacing = if app.schema_designer.history_panel_visible || app.ai_chat.visible { 8.0 } else { 0.0 };
-            let canvas_width = ui.available_width() - history_width - ai_width - spacing;
+            // Show properties panel when a table is selected and panel is visible
+            let show_properties = app.schema_designer.selected_table.is_some() && app.schema_designer.properties_panel_visible;
+            let properties_width = if show_properties { app.schema_designer.properties_panel_width } else { 0.0 };
+            let num_panels = [history_width > 0.0, ai_width > 0.0, properties_width > 0.0].iter().filter(|&&x| x).count();
+            let spacing = if num_panels > 0 { 8.0 * num_panels as f32 } else { 0.0 };
+            let canvas_width = ui.available_width() - history_width - ai_width - properties_width - spacing;
 
             // Canvas area
             ui.allocate_ui_with_layout(
@@ -189,6 +199,12 @@ pub fn render_schema_designer_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster
                 },
             );
 
+            // Table properties panel (right side of canvas, shown when table selected)
+            if show_properties {
+                ui.separator();
+                render_table_properties_panel(app, ui);
+            }
+
             // History panel (right sidebar)
             if app.schema_designer.history_panel_visible {
                 ui.separator();
@@ -216,7 +232,8 @@ pub fn render_schema_designer_tab(app: &mut DbctlApp, ui: &mut egui::Ui, cluster
     render_template_dialog(app, &ctx);
     render_template_confirm_dialog(app, &ctx);
     render_delete_table_dialog(app, &ctx);
-    render_api_key_dialog(app, &ctx);
+    render_delete_column_dialog(app, &ctx);
+    // API key dialog is now rendered in main.rs via dialogs::render_api_key_dialog
 }
 
 fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) {
@@ -311,7 +328,7 @@ fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) 
         ui.checkbox(&mut app.schema_designer.canvas.show_grid, "Grid");
         ui.checkbox(&mut app.schema_designer.canvas.snap_to_grid, "Snap");
 
-        // Right side - AI toggle, History, and DDL
+        // Right side - AI toggle, History, Properties, and DDL
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ai_button_text = if app.ai_chat.visible { "Hide AI" } else { "AI Assistant" };
             if ui.button(ai_button_text).on_hover_text("Cmd+Shift+I").clicked() {
@@ -321,6 +338,14 @@ fn render_toolbar(app: &mut DbctlApp, ui: &mut egui::Ui, cluster: &ClusterInfo) 
             let history_button_text = if app.schema_designer.history_panel_visible { "Hide History" } else { "History" };
             if ui.button(history_button_text).on_hover_text("Cmd+Shift+H").clicked() {
                 app.schema_designer.history_panel_visible = !app.schema_designer.history_panel_visible;
+            }
+
+            // Properties panel toggle (only show when table is selected)
+            if app.schema_designer.selected_table.is_some() {
+                let props_button_text = if app.schema_designer.properties_panel_visible { "Hide Props" } else { "Properties" };
+                if ui.button(props_button_text).on_hover_text("Table properties panel").clicked() {
+                    app.schema_designer.properties_panel_visible = !app.schema_designer.properties_panel_visible;
+                }
             }
 
             let ddl_button_text = if app.schema_designer.ddl_panel_expanded { "Hide DDL" } else { "DDL" };
@@ -366,13 +391,62 @@ fn render_sql_preview(app: &mut DbctlApp, ui: &mut egui::Ui) {
 
     // DDL Panel
     if app.schema_designer.ddl_panel_expanded {
+        // Resizable separator - drag to resize the DDL panel
+        let separator_height = 6.0;
+        let separator_response = ui.allocate_response(
+            egui::vec2(ui.available_width(), separator_height),
+            egui::Sense::drag(),
+        );
+
+        // Draw the separator with visual feedback
+        let separator_rect = separator_response.rect;
+        let is_hovered = separator_response.hovered();
+        let is_dragging = separator_response.dragged();
+
+        let separator_color = if is_dragging {
+            app.theme.selection_bg
+        } else if is_hovered {
+            app.theme.text_muted
+        } else {
+            ui.visuals().widgets.noninteractive.bg_stroke.color
+        };
+
+        ui.painter().rect_filled(
+            separator_rect,
+            0.0,
+            separator_color,
+        );
+
+        // Draw grip lines in the center
+        let grip_y = separator_rect.center().y;
+        let grip_width = 30.0;
+        let grip_left = separator_rect.center().x - grip_width / 2.0;
+        for i in 0..3 {
+            let y = grip_y - 1.5 + (i as f32) * 1.5;
+            ui.painter().line_segment(
+                [egui::pos2(grip_left, y), egui::pos2(grip_left + grip_width, y)],
+                egui::Stroke::new(1.0, app.theme.text_muted),
+            );
+        }
+
+        // Change cursor on hover
+        if is_hovered || is_dragging {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+
+        // Handle drag to resize
+        if separator_response.dragged() {
+            let delta = separator_response.drag_delta().y;
+            // Dragging up (negative delta) makes panel larger, dragging down makes it smaller
+            app.schema_designer.ddl_panel_height = (app.schema_designer.ddl_panel_height - delta)
+                .clamp(100.0, 600.0);
+        }
+
         render_ddl_panel(app, ui);
     }
 }
 
 fn render_ddl_panel(app: &DbctlApp, ui: &mut egui::Ui) {
-    ui.separator();
-
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("DDL - Complete Schema Definition").strong());
 
@@ -403,9 +477,12 @@ fn render_ddl_panel(app: &DbctlApp, ui: &mut egui::Ui) {
         &app.schema_designer.selected_schema,
     );
 
+    // Use the stored height minus header space
+    let scroll_height = app.schema_designer.ddl_panel_height - 30.0;
+
     egui::ScrollArea::vertical()
         .id_salt("ddl_panel_scroll")
-        .max_height(200.0)
+        .max_height(scroll_height)
         .show(ui, |ui| {
             if ddl_text.is_empty() {
                 ui.label(
@@ -1023,6 +1100,8 @@ fn any_dialog_open(app: &DbctlApp) -> bool {
         || app.schema_designer.show_apply_migration_dialog
         || app.schema_designer.show_template_dialog
         || app.schema_designer.show_template_confirm_dialog
+        || app.schema_designer.show_delete_table_dialog
+        || app.schema_designer.show_delete_column_dialog
 }
 
 fn duplicate_selected(app: &mut DbctlApp) {
@@ -1059,7 +1138,18 @@ fn start_rename(_app: &mut DbctlApp) {
 
 fn delete_selected(app: &mut DbctlApp) {
     if let Some((table_name, column_name)) = app.schema_designer.selected_column.clone() {
-        // Delete column - no confirmation needed
+        // Delete column - show confirmation dialog
+        app.schema_designer.pending_delete_column = Some((table_name, column_name));
+        app.schema_designer.show_delete_column_dialog = true;
+    } else if let Some(table_name) = app.schema_designer.selected_table.clone() {
+        // Delete table - show confirmation dialog
+        app.schema_designer.pending_delete_table = Some(table_name);
+        app.schema_designer.show_delete_table_dialog = true;
+    }
+}
+
+fn confirm_delete_column(app: &mut DbctlApp) {
+    if let Some((table_name, column_name)) = app.schema_designer.pending_delete_column.take() {
         let col_to_drop = app.schema_designer.working_schema.tables
             .get(&table_name)
             .and_then(|t| t.columns.iter().find(|c| c.name == column_name).cloned());
@@ -1072,14 +1162,12 @@ fn delete_selected(app: &mut DbctlApp) {
             if let Some(table) = app.schema_designer.working_schema.tables.get_mut(&table_name) {
                 table.columns.retain(|c| c.name != column_name);
             }
+            app.schema_designer.sync_visual_column_order(&table_name);
             app.schema_designer.selected_column = None;
             app.schema_designer.refresh_pending_sql();
         }
-    } else if let Some(table_name) = app.schema_designer.selected_table.clone() {
-        // Delete table - show confirmation dialog
-        app.schema_designer.pending_delete_table = Some(table_name);
-        app.schema_designer.show_delete_table_dialog = true;
     }
+    app.schema_designer.show_delete_column_dialog = false;
 }
 
 fn confirm_delete_table(app: &mut DbctlApp) {
@@ -1104,6 +1192,8 @@ fn cancel_current_operation(app: &mut DbctlApp) {
     app.schema_designer.show_template_confirm_dialog = false;
     app.schema_designer.show_delete_table_dialog = false;
     app.schema_designer.pending_delete_table = None;
+    app.schema_designer.show_delete_column_dialog = false;
+    app.schema_designer.pending_delete_column = None;
     app.schema_designer.renaming_target = None;
 }
 
@@ -1550,20 +1640,25 @@ fn apply_template(app: &mut DbctlApp) {
 }
 
 fn render_ai_chat_sidebar(app: &mut DbctlApp, ui: &mut egui::Ui) {
-    egui::Frame::NONE
-        .inner_margin(egui::Margin::same(8))
-        .show(ui, |ui| {
-            ui.set_width(app.ai_chat.width);
-            ui.set_min_height(ui.available_height());
+    let panel_width = app.ai_chat.width;
+
+    // Allocate space for the panel (like history panel does)
+    ui.allocate_ui_with_layout(
+        egui::vec2(panel_width, ui.available_height()),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            // Add horizontal margins for consistent padding
+            ui.add_space(8.0);
+            ui.set_max_width(panel_width - 8.0); // Right padding
 
             // Header
             ui.horizontal(|ui| {
                 ui.heading("AI Schema Assistant");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("X").clicked() {
+                    if ui.button("X").on_hover_text("Close").clicked() {
                         app.ai_chat.visible = false;
                     }
-                    if ui.button("Clear").clicked() {
+                    if ui.button("Clear").on_hover_text("Clear chat history").clicked() {
                         app.ai_chat.clear_history();
                     }
                 });
@@ -1571,8 +1666,8 @@ fn render_ai_chat_sidebar(app: &mut DbctlApp, ui: &mut egui::Ui) {
 
             ui.separator();
 
-            // API key status
-            if !ApiKeyManager::has_api_key() {
+            // API key status - use app.ai_config directly
+            if !app.ai_config.has_api_key() {
                 ui.colored_label(app.theme.warning, "API key not configured");
                 if ui.button("Configure API Key").clicked() {
                     app.show_api_key_dialog = true;
@@ -1580,12 +1675,39 @@ fn render_ai_chat_sidebar(app: &mut DbctlApp, ui: &mut egui::Ui) {
                 ui.separator();
             }
 
-            // Chat history
-            let history_height = ui.available_height() - 100.0;
+            // Chat history - use remaining height minus space for input area
+            let input_area_height = 80.0;
             egui::ScrollArea::vertical()
-                .max_height(history_height)
+                .id_salt("ai_chat_scroll")
+                .auto_shrink([false, false])
+                .max_height(ui.available_height() - input_area_height)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
+                    if app.ai_chat.messages.is_empty() && app.ai_chat.pending_changes.is_none() {
+                        ui.add_space(20.0);
+                        ui.label(
+                            egui::RichText::new("Describe your schema changes in natural language.")
+                                .italics()
+                                .color(app.theme.text_muted),
+                        );
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new("Examples:")
+                                .size(11.0)
+                                .color(app.theme.text_muted),
+                        );
+                        ui.label(
+                            egui::RichText::new("- Add a users table with email and password")
+                                .size(11.0)
+                                .color(app.theme.text_muted),
+                        );
+                        ui.label(
+                            egui::RichText::new("- Add a created_at column to the orders table")
+                                .size(11.0)
+                                .color(app.theme.text_muted),
+                        );
+                    }
+
                     for message in &app.ai_chat.messages {
                         render_chat_message(ui, message, &app.theme);
                     }
@@ -1596,27 +1718,34 @@ fn render_ai_chat_sidebar(app: &mut DbctlApp, ui: &mut egui::Ui) {
                             ui.label("Thinking...");
                         });
                     }
-                });
 
-            // Pending changes proposal
-            if let Some(proposal) = app.ai_chat.pending_changes.clone() {
-                ui.separator();
-                ui.label(
-                    egui::RichText::new("Proposed changes:")
-                        .strong()
-                        .color(app.theme.success),
-                );
-                ui.label(&proposal.description);
+                    // Pending changes proposal (inside scroll area)
+                    if let Some(proposal) = app.ai_chat.pending_changes.clone() {
+                        ui.add_space(8.0);
+                        egui::Frame::new()
+                            .fill(app.theme.success.gamma_multiply(0.1))
+                            .inner_margin(egui::Margin::same(8))
+                            .corner_radius(4.0)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new("Proposed changes:")
+                                        .strong()
+                                        .color(app.theme.success),
+                                );
+                                ui.label(&proposal.description);
 
-                ui.horizontal(|ui| {
-                    if ui.button("Apply Changes").clicked() {
-                        apply_ai_changes(app, &proposal);
-                    }
-                    if ui.button("Reject").clicked() {
-                        app.ai_chat.pending_changes = None;
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    if ui.button("Apply Changes").clicked() {
+                                        apply_ai_changes(app, &proposal);
+                                    }
+                                    if ui.button("Reject").clicked() {
+                                        app.ai_chat.pending_changes = None;
+                                    }
+                                });
+                            });
                     }
                 });
-            }
 
             // Error message
             if let Some(error) = &app.ai_chat.error_message {
@@ -1626,11 +1755,13 @@ fn render_ai_chat_sidebar(app: &mut DbctlApp, ui: &mut egui::Ui) {
             ui.separator();
 
             // Input area
+            let button_width = 60.0;
             ui.horizontal(|ui| {
+                let available_width = ui.available_width();
                 let response = ui.add(
                     egui::TextEdit::multiline(&mut app.ai_chat.input_text)
                         .desired_rows(2)
-                        .desired_width(ui.available_width() - 60.0)
+                        .desired_width(available_width - button_width - 8.0)
                         .hint_text("Describe your schema..."),
                 );
 
@@ -1641,15 +1772,18 @@ fn render_ai_chat_sidebar(app: &mut DbctlApp, ui: &mut egui::Ui) {
                     app.send_ai_chat_message();
                 }
 
-                let can_send = !app.ai_chat.input_text.is_empty() && !app.ai_chat.is_loading;
-                if ui
-                    .add_enabled(can_send, egui::Button::new("Send"))
-                    .clicked()
-                {
-                    app.send_ai_chat_message();
-                }
+                ui.vertical(|ui| {
+                    let can_send = !app.ai_chat.input_text.is_empty() && !app.ai_chat.is_loading;
+                    if ui
+                        .add_enabled(can_send, egui::Button::new("Send").min_size(egui::vec2(button_width, 0.0)))
+                        .clicked()
+                    {
+                        app.send_ai_chat_message();
+                    }
+                });
             });
-        });
+        },
+    );
 }
 
 fn render_chat_message(
@@ -1681,9 +1815,11 @@ fn render_chat_message(
 
 fn apply_ai_changes(app: &mut DbctlApp, proposal: &SchemaChangeProposal) {
     let mut actions = Vec::new();
+    let mut new_table_names: Vec<String> = Vec::new();
 
     // Add new tables
     for table in &proposal.tables_to_add {
+        new_table_names.push(table.name.clone());
         actions.push(SchemaAction::CreateTable(table.clone()));
     }
 
@@ -1700,7 +1836,7 @@ fn apply_ai_changes(app: &mut DbctlApp, proposal: &SchemaChangeProposal) {
         }
     }
 
-    // Modify tables (add columns)
+    // Modify tables (add columns and constraints)
     for modification in &proposal.tables_to_modify {
         for col in &modification.columns_to_add {
             actions.push(SchemaAction::AddColumn {
@@ -1723,6 +1859,22 @@ fn apply_ai_changes(app: &mut DbctlApp, proposal: &SchemaChangeProposal) {
                 }
             }
         }
+    }
+
+    // Add constraints to existing tables
+    for (table_name, constraint) in &proposal.constraints_to_add {
+        actions.push(SchemaAction::AddConstraint {
+            table: table_name.clone(),
+            constraint: constraint.clone(),
+        });
+    }
+
+    // Add indexes to existing tables
+    for (table_name, index) in &proposal.indexes_to_add {
+        actions.push(SchemaAction::CreateIndex {
+            table: table_name.clone(),
+            index: index.clone(),
+        });
     }
 
     if !actions.is_empty() {
@@ -1751,8 +1903,23 @@ fn apply_ai_changes(app: &mut DbctlApp, proposal: &SchemaChangeProposal) {
                         t.columns.retain(|c| c.name != column.name);
                     }
                 }
+                SchemaAction::AddConstraint { table, constraint } => {
+                    if let Some(t) = app.schema_designer.working_schema.tables.get_mut(&table) {
+                        t.constraints.push(constraint);
+                    }
+                }
+                SchemaAction::CreateIndex { table, index } => {
+                    if let Some(t) = app.schema_designer.working_schema.tables.get_mut(&table) {
+                        t.indexes.push(index);
+                    }
+                }
                 _ => {}
             }
+        }
+
+        // Layout new tables to avoid overlapping
+        if !new_table_names.is_empty() {
+            layout_new_tables(&mut app.schema_designer.working_schema, &new_table_names);
         }
 
         app.schema_designer.refresh_pending_sql();
@@ -1808,66 +1975,316 @@ fn render_delete_table_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
         });
 }
 
-fn render_api_key_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
-    if !app.show_api_key_dialog {
+fn render_delete_column_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
+    if !app.schema_designer.show_delete_column_dialog {
         return;
     }
 
-    egui::Window::new("Configure API Key")
+    let (table_name, column_name) = app
+        .schema_designer
+        .pending_delete_column
+        .clone()
+        .unwrap_or_default();
+
+    egui::Window::new("Delete Column")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label("Enter your Anthropic API key:");
+            ui.label(format!(
+                "Are you sure you want to delete column '{}.{}'?",
+                table_name, column_name
+            ));
+
+            ui.add_space(5.0);
+
             ui.label(
-                egui::RichText::new("(Key is stored securely in your system keychain)")
+                egui::RichText::new("This action can be undone using Cmd+Z.")
                     .size(11.0)
                     .color(ui.visuals().text_color().gamma_multiply(0.7)),
             );
 
             ui.add_space(10.0);
 
-            ui.add(
-                egui::TextEdit::singleline(&mut app.api_key_input)
-                    .password(true)
-                    .desired_width(350.0)
-                    .hint_text("sk-ant-..."),
-            );
-
-            ui.add_space(10.0);
-
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
-                    app.show_api_key_dialog = false;
-                    app.api_key_input.clear();
+                    app.schema_designer.show_delete_column_dialog = false;
+                    app.schema_designer.pending_delete_column = None;
                 }
 
-                let can_save = app.api_key_input.starts_with("sk-ant-")
-                    || app.api_key_input.starts_with("sk-");
                 if ui
-                    .add_enabled(can_save, egui::Button::new("Save"))
+                    .add(egui::Button::new("Delete").fill(app.theme.warning))
                     .clicked()
                 {
-                    match ApiKeyManager::set_api_key(&app.api_key_input) {
-                        Ok(()) => {
-                            app.status_message = "API key saved".to_string();
-                            app.show_api_key_dialog = false;
-                            app.api_key_input.clear();
+                    confirm_delete_column(app);
+                }
+            });
+        });
+}
+
+fn render_table_properties_panel(app: &mut DbctlApp, ui: &mut egui::Ui) {
+    let panel_width = app.schema_designer.properties_panel_width;
+
+    // Get the selected table name
+    let table_name = match &app.schema_designer.selected_table {
+        Some(name) => name.clone(),
+        None => return, // No table selected, don't render
+    };
+
+    // Clone required data to avoid borrow issues
+    let table_data = app.schema_designer.working_schema.tables.get(&table_name).cloned();
+    let table = match table_data {
+        Some(t) => t,
+        None => return,
+    };
+
+    // Allocate space for the panel
+    ui.allocate_ui_with_layout(
+        egui::vec2(panel_width, ui.available_height()),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.add_space(8.0);
+            ui.set_max_width(panel_width - 8.0);
+
+            // Header with table name
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(&table_name)
+                        .strong()
+                        .size(14.0),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("X").on_hover_text("Close").clicked() {
+                        app.schema_designer.properties_panel_visible = false;
+                    }
+                });
+            });
+
+            ui.separator();
+
+            // Columns section
+            ui.label(
+                egui::RichText::new(format!("Columns ({})", table.columns.len()))
+                    .strong()
+                    .size(12.0),
+            );
+            ui.add_space(4.0);
+
+            // Column list with delete buttons
+            let columns_height = ui.available_height() - 100.0; // Reserve space for add form
+            egui::ScrollArea::vertical()
+                .id_salt("properties_columns_scroll")
+                .max_height(columns_height.max(100.0))
+                .show(ui, |ui| {
+                    let mut column_to_delete: Option<String> = None;
+
+                    for col in &table.columns {
+                        ui.horizontal(|ui| {
+                            // Delete button
+                            if ui.small_button("x")
+                                .on_hover_text(format!("Delete column '{}'", col.name))
+                                .clicked()
+                            {
+                                column_to_delete = Some(col.name.clone());
+                            }
+
+                            // Column name and type
+                            let is_pk = col.is_primary_key;
+                            let col_text = if is_pk {
+                                egui::RichText::new(&col.name).strong()
+                            } else {
+                                egui::RichText::new(&col.name)
+                            };
+                            ui.label(col_text);
+
+                            ui.label(
+                                egui::RichText::new(&col.data_type)
+                                    .size(11.0)
+                                    .color(app.theme.text_muted),
+                            );
+
+                            if is_pk {
+                                ui.label(
+                                    egui::RichText::new("PK")
+                                        .size(10.0)
+                                        .color(app.theme.pk_badge_text),
+                                );
+                            }
+
+                            if !col.is_nullable {
+                                ui.label(
+                                    egui::RichText::new("NN")
+                                        .size(10.0)
+                                        .color(app.theme.text_muted),
+                                );
+                            }
+                        });
+                    }
+
+                    // Handle column deletion
+                    if let Some(col_name) = column_to_delete {
+                        if let Some(col) = table.columns.iter().find(|c| c.name == col_name).cloned() {
+                            app.schema_designer.push_action(SchemaAction::DropColumn {
+                                table: table_name.clone(),
+                                column: col,
+                            });
+                            if let Some(t) = app.schema_designer.working_schema.tables.get_mut(&table_name) {
+                                t.columns.retain(|c| c.name != col_name);
+                            }
+                            app.schema_designer.sync_visual_column_order(&table_name);
+                            app.schema_designer.refresh_pending_sql();
                         }
-                        Err(e) => {
-                            app.status_message = format!("Failed to save API key: {}", e);
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.separator();
+
+            // Quick add column form
+            ui.label(
+                egui::RichText::new("Add Column")
+                    .strong()
+                    .size(11.0),
+            );
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.schema_designer.quick_add_column_name)
+                        .desired_width(70.0)
+                        .hint_text("name"),
+                );
+
+                egui::ComboBox::from_id_salt("quick_add_type")
+                    .selected_text(&app.schema_designer.quick_add_column_type)
+                    .width(65.0)
+                    .show_ui(ui, |ui| {
+                        for t in &["text", "varchar", "integer", "bigint", "boolean", "timestamp", "uuid", "jsonb", "serial", "numeric"] {
+                            ui.selectable_value(&mut app.schema_designer.quick_add_column_type, t.to_string(), *t);
                         }
+                    });
+
+                // Show size input for types that support it (varchar, char, numeric, etc.)
+                if type_supports_size(&app.schema_designer.quick_add_column_type) {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.schema_designer.quick_add_column_size)
+                            .desired_width(35.0)
+                            .hint_text("size"),
+                    );
+                }
+
+                let can_add = !app.schema_designer.quick_add_column_name.trim().is_empty();
+                if ui.add_enabled(can_add, egui::Button::new("+")).on_hover_text("Add column").clicked() {
+                    let col_name = app.schema_designer.quick_add_column_name.trim().to_string();
+                    let col_type = combine_type_with_size(
+                        &app.schema_designer.quick_add_column_type,
+                        &app.schema_designer.quick_add_column_size,
+                    );
+
+                    // Check if column name is unique
+                    let is_unique = app.schema_designer.working_schema.tables
+                        .get(&table_name)
+                        .map(|t| !t.columns.iter().any(|c| c.name == col_name))
+                        .unwrap_or(true);
+
+                    if is_unique {
+                        let column = ColumnModel {
+                            name: col_name,
+                            data_type: col_type,
+                            is_nullable: true,
+                            default_value: None,
+                            is_primary_key: false,
+                        };
+
+                        app.schema_designer.push_action(SchemaAction::AddColumn {
+                            table: table_name.clone(),
+                            column: column.clone(),
+                        });
+
+                        if let Some(t) = app.schema_designer.working_schema.tables.get_mut(&table_name) {
+                            t.columns.push(column);
+                        }
+
+                        app.schema_designer.sync_visual_column_order(&table_name);
+                        app.schema_designer.quick_add_column_name.clear();
+                        app.schema_designer.quick_add_column_size.clear();
+                        app.schema_designer.refresh_pending_sql();
                     }
                 }
             });
 
-            ui.add_space(5.0);
+            // Additional actions
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
 
-            ui.hyperlink_to(
-                "Get an API key from Anthropic Console",
-                "https://console.anthropic.com/settings/keys",
-            );
-        });
+            ui.horizontal(|ui| {
+                if ui.button("+ Index").on_hover_text("Add Index").clicked() {
+                    app.schema_designer.reset_new_index_form();
+                    app.schema_designer.show_new_index_dialog = true;
+                }
+                if ui.button("+ FK").on_hover_text("Add Foreign Key").clicked() {
+                    app.schema_designer.reset_new_fk_form();
+                    app.schema_designer.show_new_fk_dialog = true;
+                }
+            });
+
+            // Show indexes if any
+            if !table.indexes.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!("Indexes ({})", table.indexes.len()))
+                        .size(11.0)
+                        .color(app.theme.text_muted),
+                );
+                for idx in &table.indexes {
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        let idx_text = if idx.is_unique {
+                            format!("{} (unique)", idx.name)
+                        } else {
+                            idx.name.clone()
+                        };
+                        ui.label(
+                            egui::RichText::new(idx_text)
+                                .size(10.0)
+                                .color(app.theme.text_muted),
+                        );
+                    });
+                }
+            }
+
+            // Show FKs if any
+            let fks: Vec<_> = table.constraints.iter()
+                .filter(|c| c.constraint_type == crate::schema_designer::ConstraintType::ForeignKey)
+                .collect();
+            if !fks.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!("Foreign Keys ({})", fks.len()))
+                        .size(11.0)
+                        .color(app.theme.text_muted),
+                );
+                for fk in fks {
+                    if let (Some(ref_table), Some(ref_cols)) = (&fk.foreign_table, &fk.foreign_columns) {
+                        ui.horizontal(|ui| {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} -> {}.{}",
+                                    fk.columns.join(", "),
+                                    ref_table,
+                                    ref_cols.join(", ")
+                                ))
+                                .size(10.0)
+                                .color(app.theme.fk_line),
+                            );
+                        });
+                    }
+                }
+            }
+        },
+    );
 }
 
 fn render_history_panel(app: &mut DbctlApp, ui: &mut egui::Ui) {
@@ -1888,7 +2305,9 @@ fn render_history_panel(app: &mut DbctlApp, ui: &mut egui::Ui) {
         egui::vec2(panel_width, ui.available_height()),
         egui::Layout::top_down(egui::Align::LEFT),
         |ui| {
+            // Add horizontal margins for consistent padding
             ui.add_space(8.0);
+            ui.set_max_width(panel_width - 8.0); // Right padding
 
             // Header
             ui.horizontal(|ui| {

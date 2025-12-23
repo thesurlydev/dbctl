@@ -144,6 +144,7 @@ pub struct DbctlApp {
 
     // AI Chat
     pub ai_chat: ai_chat::AiChatState,
+    pub ai_config: ai_chat::AiConfig,
     pub show_api_key_dialog: bool,
     pub api_key_input: String,
 }
@@ -160,6 +161,9 @@ impl DbctlApp {
         let gui_config = GuiConfig::load();
         let theme_mode = gui_config.theme_mode;
         let theme = Theme::from_mode(theme_mode);
+
+        // Load AI config
+        let ai_config = ai_chat::AiConfig::load();
 
         let mut app = Self {
             clusters: Vec::new(),
@@ -218,6 +222,7 @@ impl DbctlApp {
             theme,
             theme_applied: false,
             ai_chat: ai_chat::AiChatState::new(),
+            ai_config,
             show_api_key_dialog: false,
             api_key_input: String::new(),
         };
@@ -515,8 +520,15 @@ impl DbctlApp {
 
     // Schema designer methods
     pub fn load_schema_for_designer(&mut self, cluster: &str, database: &str, schema: &str) {
+        // Save the current layout before switching databases
+        self.schema_designer.save_layout_for_database();
+
         self.schema_designer.loading_schema = true;
         self.schema_designer.reset();
+
+        // Restore any cached layout for the target database
+        self.schema_designer.restore_layout_for_database(database);
+
         self.schema_designer.selected_database = Some(database.to_string());
         self.schema_designer.selected_schema = schema.to_string();
 
@@ -1049,20 +1061,50 @@ impl DbctlApp {
                                 })
                                 .collect();
 
+                            // Restore preserved position if available, otherwise use ZERO
+                            let position = self
+                                .schema_designer
+                                .preserved_positions
+                                .get(&structure.table)
+                                .copied()
+                                .unwrap_or(egui::Pos2::ZERO);
+
                             let table = TableModel {
                                 name: structure.table.clone(),
                                 columns,
                                 constraints,
                                 indexes,
-                                position: egui::Pos2::ZERO,
+                                position,
                                 collapsed: false,
                             };
 
                             schema_model.tables.insert(structure.table.clone(), table);
                         }
 
-                        // Auto-layout the tables
-                        auto_layout_tables(&mut schema_model);
+                        // Only auto-layout if no positions were preserved (fresh load)
+                        // For reloads after migration, positions are restored from preserved_positions
+                        if self.schema_designer.preserved_positions.is_empty() {
+                            auto_layout_tables(&mut schema_model);
+                        } else {
+                            // Position any new tables that weren't in preserved_positions
+                            use crate::schema_designer::canvas::find_non_overlapping_position;
+                            let new_tables: Vec<String> = schema_model
+                                .tables
+                                .iter()
+                                .filter(|(_, t)| t.position == egui::Pos2::ZERO)
+                                .map(|(name, _)| name.clone())
+                                .collect();
+
+                            for table_name in new_tables {
+                                // Find a non-overlapping position for this new table
+                                let pos = find_non_overlapping_position(&schema_model, 200.0, 150.0);
+                                if let Some(table) = schema_model.tables.get_mut(&table_name) {
+                                    table.position = pos;
+                                }
+                            }
+                            // Clear preserved positions after restoring
+                            self.schema_designer.preserved_positions.clear();
+                        }
 
                         // Set both original and working schemas
                         self.schema_designer.original_schema = schema_model.clone();
@@ -1132,14 +1174,15 @@ impl DbctlApp {
         self.ai_chat.is_loading = true;
         self.ai_chat.error_message = None;
 
-        let api_key = match ai_chat::ApiKeyManager::get_api_key() {
-            Some(key) => key,
-            None => {
-                self.ai_chat.is_loading = false;
-                self.ai_chat.error_message = Some("API key not configured".to_string());
-                return;
-            }
-        };
+        if !self.ai_config.has_api_key() {
+            self.ai_chat.is_loading = false;
+            self.ai_chat.error_message = Some("API key not configured. Go to Settings > AI API Key.".to_string());
+            return;
+        }
+
+        let api_key = self.ai_config.api_key.clone();
+        let model = self.ai_config.model.clone();
+        let max_tokens = self.ai_config.max_tokens;
 
         let tx = self.result_tx.clone();
         let current_schema = self.schema_designer.working_schema.clone();
@@ -1149,6 +1192,8 @@ impl DbctlApp {
         self.runtime.spawn(async move {
             match ai_chat::claude_client::generate_schema_changes(
                 &api_key,
+                &model,
+                max_tokens,
                 &current_schema,
                 &history,
                 &message,
@@ -1423,6 +1468,13 @@ impl eframe::App for DbctlApp {
                         }
                     });
                 });
+
+                ui.menu_button("Settings", |ui| {
+                    if ui.button("AI Assistant...").clicked() {
+                        self.show_api_key_dialog = true;
+                        ui.close();
+                    }
+                });
             });
         });
 
@@ -1686,6 +1738,7 @@ impl eframe::App for DbctlApp {
         dialogs::render_drop_db_dialog(self, ctx);
         dialogs::render_add_connection_dialog(self, ctx);
         dialogs::render_edit_connection_dialog(self, ctx);
+        dialogs::render_api_key_dialog(self, ctx);
 
         // Command palette (render last to appear on top)
         command_palette::render_command_palette(self, ctx);

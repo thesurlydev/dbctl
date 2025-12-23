@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use crate::ai_chat::{AiConfig, AVAILABLE_MODELS};
 use crate::state::ConnectionInfo;
 use crate::DbctlApp;
 
@@ -404,5 +405,165 @@ fn render_connection_form(app: &mut DbctlApp, ui: &mut egui::Ui) {
                     );
                 });
             ui.end_row();
+        });
+}
+
+pub fn render_api_key_dialog(app: &mut DbctlApp, ctx: &egui::Context) {
+    if !app.show_api_key_dialog {
+        return;
+    }
+
+    egui::Window::new("AI Schema Assistant Settings")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_width(420.0)
+        .show(ctx, |ui| {
+            ui.label("Configure the AI Schema Assistant for natural language schema design.");
+            ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new("Settings are saved to ~/.dbctl/ai-config.json")
+                    .size(11.0)
+                    .color(app.theme.text_muted),
+            );
+
+            ui.add_space(15.0);
+
+            // API Key section
+            ui.heading("API Key");
+            ui.add_space(5.0);
+
+            let has_key = !app.ai_config.api_key.is_empty();
+            ui.horizontal(|ui| {
+                ui.label("Status:");
+                if has_key {
+                    ui.label(egui::RichText::new("Configured").color(app.theme.success));
+                } else {
+                    ui.label(egui::RichText::new("Not configured").color(app.theme.warning));
+                }
+            });
+
+            ui.add_space(5.0);
+
+            ui.horizontal(|ui| {
+                ui.label("API Key:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.api_key_input)
+                        .password(true)
+                        .desired_width(280.0)
+                        .hint_text(if has_key { "(unchanged)" } else { "sk-ant-..." }),
+                );
+            });
+
+            ui.add_space(10.0);
+
+            ui.hyperlink_to(
+                "Get an API key from Anthropic Console",
+                "https://console.anthropic.com/settings/keys",
+            );
+
+            ui.add_space(15.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+            // Model section
+            ui.heading("Model");
+            ui.add_space(5.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Model:");
+                egui::ComboBox::from_id_salt("ai_model_select")
+                    .selected_text(app.ai_config.model_display_name())
+                    .width(280.0)
+                    .show_ui(ui, |ui| {
+                        for (model_id, model_name) in AVAILABLE_MODELS {
+                            ui.selectable_value(
+                                &mut app.ai_config.model,
+                                model_id.to_string(),
+                                *model_name,
+                            );
+                        }
+                    });
+            });
+
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Max Tokens:");
+                ui.add(
+                    egui::DragValue::new(&mut app.ai_config.max_tokens)
+                        .range(256..=16384)
+                        .speed(100),
+                );
+                ui.label(
+                    egui::RichText::new("(response length limit)")
+                        .size(11.0)
+                        .color(app.theme.text_muted),
+                );
+            });
+
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+            // Action buttons
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    // Reload config to discard changes
+                    app.ai_config = AiConfig::load();
+                    app.show_api_key_dialog = false;
+                    app.api_key_input.clear();
+                }
+
+                // Reset to defaults button
+                if ui.button("Reset to Defaults").clicked() {
+                    app.ai_config = AiConfig::default();
+                    app.api_key_input.clear();
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Only require valid key format if user is entering a new key
+                    let new_key_valid = app.api_key_input.is_empty()
+                        || app.api_key_input.starts_with("sk-ant-")
+                        || app.api_key_input.starts_with("sk-");
+
+                    if ui
+                        .add_enabled(new_key_valid, egui::Button::new("Save"))
+                        .clicked()
+                    {
+                        // Update API key if user entered a new one
+                        if !app.api_key_input.is_empty() {
+                            app.ai_config.api_key = app.api_key_input.clone();
+                        }
+
+                        match app.ai_config.save() {
+                            Ok(()) => {
+                                app.status_message = "AI settings saved".to_string();
+                                app.show_api_key_dialog = false;
+                                app.api_key_input.clear();
+                            }
+                            Err(e) => {
+                                app.status_message = format!("Failed to save settings: {}", e);
+                            }
+                        }
+                    }
+
+                    // Remove key button (only if key exists)
+                    if has_key {
+                        if ui.button("Remove Key").clicked() {
+                            app.ai_config.api_key.clear();
+                            app.api_key_input.clear();
+                            match app.ai_config.save() {
+                                Ok(()) => {
+                                    app.status_message = "API key removed".to_string();
+                                }
+                                Err(e) => {
+                                    app.status_message = format!("Failed to save: {}", e);
+                                }
+                            }
+                        }
+                    }
+                });
+            });
         });
 }

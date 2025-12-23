@@ -101,6 +101,9 @@ pub struct SchemaDesignerState {
     // DDL panel expanded
     pub ddl_panel_expanded: bool,
 
+    // DDL panel height (resizable)
+    pub ddl_panel_height: f32,
+
     // Template selection state
     pub show_template_dialog: bool,
     pub template_search_query: String,
@@ -111,6 +114,27 @@ pub struct SchemaDesignerState {
     // Delete table confirmation
     pub show_delete_table_dialog: bool,
     pub pending_delete_table: Option<String>,
+
+    // Delete column confirmation
+    pub show_delete_column_dialog: bool,
+    pub pending_delete_column: Option<(String, String)>, // (table_name, column_name)
+
+    // Table properties panel
+    pub properties_panel_visible: bool,
+    pub properties_panel_width: f32,
+
+    // Quick add column form (in properties panel)
+    pub quick_add_column_name: String,
+    pub quick_add_column_type: String,
+    pub quick_add_column_size: String,
+
+    // Preserved table positions for reload (table_name -> position)
+    // Used to restore layout after schema reload from database
+    pub preserved_positions: HashMap<String, egui::Pos2>,
+
+    // Per-database layout cache (database_name -> (table_name -> position))
+    // Used to preserve layouts when switching between databases
+    pub database_layouts: HashMap<String, HashMap<String, egui::Pos2>>,
 }
 
 /// Target for rename operation
@@ -127,6 +151,10 @@ impl SchemaDesignerState {
             new_column_type: "text".to_string(),
             new_column_nullable: true,
             sql_preview_expanded: true,
+            ddl_panel_height: 200.0,
+            properties_panel_visible: true,
+            properties_panel_width: 280.0,
+            quick_add_column_type: "text".to_string(),
             ..Default::default()
         }
     }
@@ -236,11 +264,13 @@ impl SchemaDesignerState {
                 if let Some(t) = self.working_schema.tables.get_mut(table) {
                     t.columns.push(column.clone());
                 }
+                self.sync_visual_column_order(table);
             }
             SchemaAction::DropColumn { table, column } => {
                 if let Some(t) = self.working_schema.tables.get_mut(table) {
                     t.columns.retain(|c| c.name != column.name);
                 }
+                self.sync_visual_column_order(table);
             }
             SchemaAction::AlterColumn { table, new, .. } => {
                 if let Some(t) = self.working_schema.tables.get_mut(table) {
@@ -308,11 +338,13 @@ impl SchemaDesignerState {
                 if let Some(t) = self.working_schema.tables.get_mut(table) {
                     t.columns.retain(|c| c.name != column.name);
                 }
+                self.sync_visual_column_order(table);
             }
             SchemaAction::DropColumn { table, column } => {
                 if let Some(t) = self.working_schema.tables.get_mut(table) {
                     t.columns.push(column.clone());
                 }
+                self.sync_visual_column_order(table);
             }
             SchemaAction::AlterColumn { table, old, .. } => {
                 if let Some(t) = self.working_schema.tables.get_mut(table) {
@@ -370,19 +402,48 @@ impl SchemaDesignerState {
         self.action_index = 0;
         self.canvas = CanvasState::default();
         self.visual_column_order.clear();
+        self.quick_add_column_name.clear();
+        self.quick_add_column_type = "text".to_string();
+        self.quick_add_column_size.clear();
     }
 
-    /// Reset for reload after migration - preserves action history
+    /// Reset for reload after migration - preserves action history and table positions
     pub fn reset_for_reload(&mut self) {
+        // Preserve table positions before clearing schemas
+        self.preserved_positions.clear();
+        for (name, table) in &self.working_schema.tables {
+            self.preserved_positions.insert(name.clone(), table.position);
+        }
+
         self.original_schema = SchemaModel::default();
         self.working_schema = SchemaModel::default();
         self.selected_table = None;
         self.selected_column = None;
         self.selected_index = None;
         self.pending_sql.clear();
-        // Preserve action_history and action_index
+        // Preserve action_history, action_index, and preserved_positions
         self.canvas = CanvasState::default();
         self.visual_column_order.clear();
+    }
+
+    /// Save the current layout for a database before switching away
+    pub fn save_layout_for_database(&mut self) {
+        if let Some(db_name) = &self.selected_database {
+            if !self.working_schema.tables.is_empty() {
+                let mut layout = HashMap::new();
+                for (name, table) in &self.working_schema.tables {
+                    layout.insert(name.clone(), table.position);
+                }
+                self.database_layouts.insert(db_name.clone(), layout);
+            }
+        }
+    }
+
+    /// Restore layout for a database if previously cached
+    pub fn restore_layout_for_database(&mut self, database: &str) {
+        if let Some(layout) = self.database_layouts.get(database) {
+            self.preserved_positions = layout.clone();
+        }
     }
 
     /// Reset form fields

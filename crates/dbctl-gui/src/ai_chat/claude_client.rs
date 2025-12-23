@@ -8,8 +8,6 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-const MODEL: &str = "claude-sonnet-4-20250514";
-const MAX_TOKENS: u32 = 4096;
 
 /// Request body for Claude API
 #[derive(Serialize)]
@@ -153,6 +151,8 @@ Remember: Be concise but thorough. Suggest best practices when relevant."#,
 /// Call Claude API to generate schema changes
 pub async fn generate_schema_changes(
     api_key: &str,
+    model: &str,
+    max_tokens: u32,
     current_schema: &SchemaModel,
     conversation_history: &[ChatMessage],
     new_message: &str,
@@ -178,8 +178,8 @@ pub async fn generate_schema_changes(
     });
 
     let request = ClaudeRequest {
-        model: MODEL.to_string(),
-        max_tokens: MAX_TOKENS,
+        model: model.to_string(),
+        max_tokens,
         system: build_system_prompt(current_schema),
         messages,
     };

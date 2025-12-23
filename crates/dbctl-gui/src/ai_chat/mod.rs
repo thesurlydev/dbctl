@@ -4,7 +4,106 @@ pub mod claude_client;
 
 use crate::schema_designer::{ColumnModel, ConstraintModel, IndexModel, TableModel};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 use std::time::SystemTime;
+
+/// Available Claude models
+pub const AVAILABLE_MODELS: &[(&str, &str)] = &[
+    ("claude-sonnet-4-20250514", "Claude Sonnet 4 (Recommended)"),
+    ("claude-opus-4-20250514", "Claude Opus 4"),
+    ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet"),
+    ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku (Fast)"),
+];
+
+/// Default values for AI configuration
+pub const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
+pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// AI configuration persisted to disk
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfig {
+    /// Anthropic API key
+    #[serde(default)]
+    pub api_key: String,
+    /// Model to use for schema generation
+    #[serde(default = "default_model")]
+    pub model: String,
+    /// Maximum tokens for response
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_model() -> String {
+    DEFAULT_MODEL.to_string()
+}
+
+fn default_max_tokens() -> u32 {
+    DEFAULT_MAX_TOKENS
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model: DEFAULT_MODEL.to_string(),
+            max_tokens: DEFAULT_MAX_TOKENS,
+        }
+    }
+}
+
+impl AiConfig {
+    /// Get the config file path (~/.dbctl/ai-config.json)
+    fn config_path() -> PathBuf {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.join(".dbctl").join("ai-config.json")
+    }
+
+    /// Load config from disk, or return default if not found
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(config) = serde_json::from_str(&content) {
+                    return config;
+                }
+            }
+        }
+        Self::default()
+    }
+
+    /// Save config to disk
+    pub fn save(&self) -> Result<(), String> {
+        let path = Self::config_path();
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+        }
+
+        let content = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+        fs::write(&path, content).map_err(|e| format!("Failed to write config: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Check if API key is configured
+    pub fn has_api_key(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+
+    /// Get display name for current model
+    pub fn model_display_name(&self) -> &str {
+        AVAILABLE_MODELS
+            .iter()
+            .find(|(id, _)| *id == self.model)
+            .map(|(_, name)| *name)
+            .unwrap_or(&self.model)
+    }
+}
 
 /// Chat message role
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,38 +214,5 @@ impl AiChatState {
         self.messages.clear();
         self.pending_changes = None;
         self.error_message = None;
-    }
-}
-
-/// API key management using system keychain
-pub struct ApiKeyManager;
-
-impl ApiKeyManager {
-    const SERVICE: &'static str = "dbctl-gui";
-    const USERNAME: &'static str = "anthropic_api_key";
-
-    /// Get stored API key
-    pub fn get_api_key() -> Option<String> {
-        keyring::Entry::new(Self::SERVICE, Self::USERNAME)
-            .ok()
-            .and_then(|entry| entry.get_password().ok())
-    }
-
-    /// Store API key securely
-    pub fn set_api_key(key: &str) -> Result<(), keyring::Error> {
-        let entry = keyring::Entry::new(Self::SERVICE, Self::USERNAME)?;
-        entry.set_password(key)
-    }
-
-    /// Delete stored API key
-    #[allow(dead_code)]
-    pub fn delete_api_key() -> Result<(), keyring::Error> {
-        let entry = keyring::Entry::new(Self::SERVICE, Self::USERNAME)?;
-        entry.delete_credential()
-    }
-
-    /// Check if API key is configured
-    pub fn has_api_key() -> bool {
-        Self::get_api_key().is_some()
     }
 }
