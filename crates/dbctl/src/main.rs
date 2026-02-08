@@ -23,6 +23,9 @@ enum Commands {
         version: String,
     },
 
+    /// List available PostgreSQL versions
+    Versions,
+
     /// Initialize a new database cluster (interactive if args missing)
     Init {
         /// Cluster name
@@ -216,6 +219,16 @@ enum Commands {
         cluster: Option<String>,
     },
 
+    /// Connect to a database and start an interactive SQL REPL
+    Use {
+        /// Database name
+        database: String,
+
+        /// Cluster name (optional - auto-selected)
+        #[arg(long, short = 'c')]
+        cluster: Option<String>,
+    },
+
     /// Backward compatibility commands (hidden from help)
     #[command(hide = true)]
     Server {
@@ -241,6 +254,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Install { version }) => {
             server::handle_action(server::ServerAction::Install { version }).await?;
+        }
+        Some(Commands::Versions) => {
+            server::list_available_versions()?;
         }
         Some(Commands::Init {
             name,
@@ -424,6 +440,12 @@ async fn main() -> Result<()> {
                 action: postgres::UserAction::List { cluster },
             })
             .await?;
+        }
+        Some(Commands::Use { database, cluster }) => {
+            let cluster = resolve_cluster(cluster)?;
+            server::ensure_cluster_running(&cluster)?;
+            postgres::run_repl(&cluster, &database).await?;
+            save_context(&cluster)?;
         }
         Some(Commands::Server { action }) => {
             server::handle_action(action).await?;

@@ -6,7 +6,13 @@ This guide walks you through the main features of dbctl with practical examples.
 
 ### Install PostgreSQL
 
-First, install a PostgreSQL version:
+See which versions are available:
+
+```bash
+dbctl versions
+```
+
+Then install a PostgreSQL version:
 
 ```bash
 dbctl install 16.3
@@ -133,7 +139,22 @@ dbctl databases -c production
 dbctl ls
 ```
 
-### Interactive SQL Shell
+### Interactive SQL REPL
+
+```bash
+# Start a built-in SQL REPL for a database
+dbctl use myapp
+
+# With explicit cluster
+dbctl use myapp -c production
+```
+
+The REPL supports:
+- Multi-line SQL statements (terminated with `;`)
+- Command history (up/down arrows)
+- Backslash commands: `\dt` (list tables), `\d table` (describe), `\l` (list databases), `\q` (quit)
+
+### Interactive psql Shell
 
 ```bash
 # Open shell to a database
@@ -293,8 +314,8 @@ dbctl db grant --cluster mydev --database myapp --user readonly --on table --tab
 # 9. Backup the database
 dbctl backup myapp -o myapp_backup.sql
 
-# 10. Open an interactive shell
-dbctl shell myapp
+# 10. Open an interactive SQL REPL
+dbctl use myapp
 ```
 
 ## Cluster Management

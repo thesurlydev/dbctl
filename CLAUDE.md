@@ -10,167 +10,117 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-The codebase is organized into four main modules:
+### Workspace Structure
 
-- `src/main.rs` - CLI entry point with flat command structure and auto-selection logic
-- `src/context.rs` - Manages last-used cluster context for smart defaults
-- `src/server.rs` - PostgreSQL server installation and cluster management
-- `src/postgres.rs` - Database operations (create/drop/list databases, shell, exec, backup/restore, user management, privilege management, info)
+This is a Cargo workspace with two crates:
+
+```
+crates/
+  dbctl/        # CLI tool and shared library
+  dbctl-gui/    # Native GUI application (eframe/egui)
+```
+
+### CLI Crate (`crates/dbctl`)
+
+Both a library and a binary. The library is re-exported for use by `dbctl-gui`.
+
+- `src/main.rs` - CLI entry point using clap with flat command structure and auto-selection logic
+- `src/lib.rs` - Re-exports all public types and functions from submodules
+- `src/server.rs` - PostgreSQL installation (binary downloads from EnterpriseDB), cluster lifecycle (`pg_ctl` start/stop/restart/reload), `ClusterMetadata`, `ensure_cluster_running()`
+- `src/postgres.rs` - Database operations via `tokio-postgres`: CRUD databases, interactive SQL REPL (`run_repl` using `simple_query` + `rustyline`), shell/exec (spawns psql/pg_dump binaries), backup/restore, user and privilege management, table browsing, schema introspection
+- `src/context.rs` - Last-used cluster tracking (`~/.dbctl/context.json`)
+- `src/connection.rs` - Remote PostgreSQL connection profiles (`ConnectionProfile`, `ConnectionStore`, SSL support), persisted to `~/.dbctl/connections.json`
+
+### GUI Crate (`crates/dbctl-gui`)
+
+Native desktop app built with eframe/egui. Depends on the `dbctl` library crate.
+
+- `src/main.rs` - App entry point, `DbctlApp` struct, top-level UI rendering, async result handling via `mpsc` channels
+- `src/state.rs` - Shared types: `Tab` enum (Overview/Databases/Users/Logs/Sql/Tables/SchemaDesigner), `AsyncResult` enum, `ActiveConnection`
+- `src/tabs/` - One module per tab (overview, databases, users, logs, sql, tables, schema_designer)
+- `src/schema_designer/` - Visual schema editor: `mod.rs` (state), `canvas.rs` (rendering, crow's foot FK notation), `diff.rs` (SQL migration and DDL generation), `actions.rs` (undo/redo with timestamps), `models.rs` (data types), `templates.rs` (pre-built schema templates)
+- `src/ai_chat/` - Claude API integration for natural language schema design: `mod.rs` (state, config), `claude_client.rs` (API calls, prompt engineering)
+- `src/command_palette.rs` - Fuzzy-searchable command palette (Cmd+K)
+- `src/theme.rs` - Dark/light/system theme support, persisted to `~/.dbctl/gui-config.json`
+- `src/dialogs.rs` - Modal dialogs (settings, confirmations)
+- `src/syntax.rs` - SQL syntax highlighting
+- `src/sql_state.rs` - SQL tab state (multiple query tabs, history)
+- `src/table_browser.rs` - Table browser state
 
 ### Key Design Decisions
 
-**Directory Structure**: All PostgreSQL installations and clusters are stored in `~/.dbctl/`:
+**Runtime data directory**: All PostgreSQL installations and clusters are stored in `~/.dbctl/`:
 - `~/.dbctl/versions/{version}/` - PostgreSQL binary installations
-- `~/.dbctl/clusters/{name}/` - Database clusters with metadata, data, and logs
-- `~/.dbctl/context.json` - Stores last-used cluster for smart defaults
+- `~/.dbctl/clusters/{name}/` - Database clusters with `metadata.json`, `data/`, and `logs/`
+- `~/.dbctl/context.json` - Last-used cluster for smart defaults
+- `~/.dbctl/connections.json` - Saved remote connection profiles
+- `~/.dbctl/gui-config.json` - GUI theme preferences
+- `~/.dbctl/ai-config.json` - AI assistant settings (model, API key via keyring)
+- `~/.dbctl/repl_history` - SQL REPL command history
+- `~/.dbctl/queries/` - Saved SQL queries
+- `~/.dbctl/schema-layouts/` - Persisted schema designer table positions
 
-**Cluster Metadata**: Each cluster has a `metadata.json` file storing version, port, username, and directory paths. This is loaded by `load_cluster_metadata()` in `src/server.rs`.
+**Cluster auto-selection priority**: (1) explicit `--cluster` flag, (2) auto-select if only one cluster exists, (3) last-used from context.json, (4) error with suggestions.
 
-**Installation Strategy**: Downloads prebuilt binaries from EnterpriseDB for both macOS (universal binaries) and Linux (architecture-specific). macOS uses .zip files (extracted with the `zip` crate), Linux uses .tar.gz files (extracted with the `tar` and `flate2` crates). All extraction is done in-memory using pure Rust implementations, requiring no external tools.
+**Auto-start**: Database commands call `ensure_cluster_running()` to automatically start stopped clusters.
 
-**Smart Defaults**: Commands automatically select clusters based on:
-1. Explicit `--cluster` flag
-2. Auto-selection if only one cluster exists
-3. Last-used cluster from `~/.dbctl/context.json`
-4. Error with helpful suggestions if ambiguous
+**Installation**: Downloads prebuilt PostgreSQL binaries from EnterpriseDB. macOS uses .zip (extracted with `zip` crate, with symlink handling for shared libraries), Linux uses .tar.gz (extracted with `tar` + `flate2` crates). All extraction is pure Rust, no external tools needed.
 
-**Auto-Start**: Database commands automatically start stopped clusters using `ensure_cluster_running()`.
+**GUI async pattern**: Database operations run on a tokio runtime, communicate results back to the egui render loop via `mpsc::Sender<AsyncResult>` / `mpsc::Receiver<AsyncResult>`.
 
-**Interactive Mode**: Missing arguments trigger interactive prompts (using `dialoguer` crate).
+**Dual connection model**: The GUI supports both local clusters (via `ClusterMetadata`) and remote connections (via `ConnectionProfile`). Functions with `_with_source` suffix accept a `ConnectionSource` enum to handle both.
 
-**Colored Output**: Status and error messages use colored text (using `colored` crate) for better readability.
+## Build and Development Commands
 
-## Command Structure
-
-### Flat Commands (Primary Interface)
-
-**Installation & Clusters:**
-- `install <version>` - Install PostgreSQL
-- `init <name>` - Create cluster (interactive if args omitted)
-- `start [cluster]` - Start cluster (auto-selects)
-- `stop [cluster]` - Stop cluster
-- `restart [cluster]` - Restart cluster
-- `reload [cluster]` - Reload config
-- `status [cluster]` - Show status (all if omitted)
-- `list` / `ls` - List all clusters and databases
-- `remove <cluster>` / `rm` - Remove cluster (with confirmation)
-- `logs [cluster]` - View logs
-
-**Databases:**
-- `createdb <name>` - Create database (auto-selects cluster, auto-starts)
-- `dropdb <name>` - Drop database (with confirmation)
-- `databases` - List all databases
-- `shell [database]` - Open psql (auto-selects cluster, auto-starts)
-- `exec --sql "..." -d <db>` - Execute SQL
-- `backup <db> -o <file>` - Backup
-- `restore <db> -i <file>` - Restore
-
-**Users:**
-- `createuser <name>` - Create user (prompts for password)
-- `users` - List users
-
-### Backward Compatibility
-
-The nested command structure (`server`/`db` subcommands) is still supported but hidden from help.
-
-## Common Commands
-
-### Using Justfile (Recommended)
-
-The project includes a Justfile for common tasks:
+### Using Justfile
 
 ```bash
 just         # List all available commands
-just build   # Build the project
-just test    # Run all tests
+just build   # Build the entire workspace
+just test    # Run all tests (--test-threads=1)
 just fmt     # Format code
-just clippy  # Run linter
-just check   # Run format and lint checks
-just install # Install to ~/.cargo/bin
+just clippy  # Run clippy with -D warnings
+just check   # Run fmt + clippy
 ```
 
 ### Using Cargo Directly
 
 ```bash
-cargo build                                              # Build the project
-cargo run -- <command>                                   # Run with arguments
-cargo build --release                                    # Build optimized binary
-cargo test                                               # Run all tests
-cargo test --test integration_tests -- --test-threads=1  # Run integration tests
-cargo test <test_name>                                   # Run a specific test
-cargo clippy                                             # Run linter
-cargo fmt                                                # Format code
+cargo build                                              # Build entire workspace
+cargo build -p dbctl                                     # Build CLI only
+cargo build -p dbctl-gui                                 # Build GUI only
+cargo run -p dbctl -- <command>                          # Run CLI with arguments
+cargo run -p dbctl-gui                                   # Run GUI
+cargo test -- --test-threads=1                           # Run all tests
+cargo test --test integration_tests -- --test-threads=1  # Integration tests only
+cargo test <test_name> -- --test-threads=1               # Run a specific test
+cargo clippy --all-targets --all-features -- -D warnings # Lint
+cargo fmt                                                # Format
 ```
 
-**Integration Tests** (located in `tests/integration_tests.rs`): Comprehensive suite covering all commands including installation, cluster management, database operations, and error handling. Tests run sequentially to avoid port conflicts.
+**Integration tests** are at `tests/integration_tests.rs` (workspace root). They download real PostgreSQL binaries and run actual cluster/database operations. Tests MUST run with `--test-threads=1` to avoid port conflicts.
 
-### Example Usage (New Commands)
+## CLI Command Structure
 
-```bash
-# No arguments - show status of all clusters
-cargo run
+Flat commands are the primary interface. The nested `server`/`db` subcommand structure is still supported but hidden from help.
 
-# Install and initialize
-cargo run -- install 16.3
-cargo run -- init mydev  # Interactive prompts for version, port, etc.
+**Cluster lifecycle**: `install`, `versions`, `init`, `start`, `stop`, `restart`, `reload`, `status`, `list`/`ls`, `remove`/`rm`, `logs`
 
-# Start cluster (auto-selected if only one)
-cargo run -- start
+**Database operations**: `createdb`, `dropdb`, `databases`, `use`, `shell`, `exec`, `backup`, `restore`
 
-# Create database (auto-starts cluster if stopped)
-cargo run -- createdb myapp
+**User management**: `createuser`, `users`
 
-# Open shell (auto-selects cluster, auto-starts)
-cargo run -- shell myapp
-
-# Create user (prompts for password)
-cargo run -- createuser alice
-
-# List everything
-cargo run -- ls
-
-# Multiple clusters - uses last-used or shows options
-cargo run -- start dev
-cargo run -- createdb testdb  # Uses 'dev' cluster from context
-
-# Explicit cluster specification
-cargo run -- createdb proddb -c production
-```
+**Privilege management** (nested only): `db grant`, `db revoke`, `db privileges`
 
 ## Development Notes
 
-- The project uses tokio for async runtime, required for tokio-postgres
+- Uses tokio async runtime (required for tokio-postgres)
 - Database operations connect to the `postgres` maintenance database by default
-- Clusters are configured with `trust` authentication for local connections in `pg_hba.conf`
-- Port configuration is written to `postgresql.conf` during cluster initialization
-- The `ClusterMetadata` struct is the central configuration object loaded by both server and database operations
-- **Symlink handling**: The ZIP extraction code in `src/server.rs` properly handles symlinks in macOS archives by detecting them via `file.is_symlink()` and creating actual symlinks instead of extracting them as text files. This is critical for PostgreSQL's shared library dependencies (libicu*, libpq, etc.)
-- **Command execution**: The `shell`, `exec`, `backup`, and `restore` commands use PostgreSQL's own binaries (psql, pg_dump) from the cluster's version directory via `get_version_dir()`
-- **User management**: User creation and management operations connect to the `postgres` database and use SQL commands directly via tokio-postgres
-- **Privilege management**: The `grant`, `revoke`, and `privileges` commands provide comprehensive privilege management for databases, schemas, and tables
-- **Logs**: The `logs` command reads from the cluster's logs directory and uses `tail -f` for follow mode
-- **Cluster control**: `start`, `stop`, `restart`, and `reload` commands use `pg_ctl` from the cluster's version directory
-- **Context management**: The `Context` struct in `src/context.rs` manages the last-used cluster, stored in `~/.dbctl/context.json`, enabling smart auto-selection
-- **Auto-start**: `ensure_cluster_running()` in `src/server.rs` automatically starts stopped clusters before database operations
-- **Interactive prompts**: Using the `dialoguer` crate for password prompts, confirmations, and missing arguments
-- **Colored output**: Using the `colored` crate for status symbols (●/○) and colored text in errors and status displays
-- **Table Browser (GUI)**: The `Tables` tab in dbctl-gui provides schema tree navigation, table structure viewing (columns, constraints, indexes), paginated data browsing, row insert/delete, and CSV/JSON export. Key functions: `list_schemas()`, `list_tables()`, `get_table_structure()`, `get_table_data()`, `insert_row()`, `delete_row()`, `export_to_csv()`, `export_to_json()` in `postgres.rs`
-- **Schema Designer (GUI)**: The `Schema` tab provides a visual canvas-based schema editor with draggable tables, drag-and-drop column reordering (visual only, doesn't affect schema), foreign key visualization using crow's foot notation (bezier curves with "one" indicator at PK end and crow's foot with optional circle at FK end), live SQL migration preview, DDL panel for complete schema definition, and comprehensive keyboard shortcuts (Cmd+N for new table, Cmd+S to apply, Cmd+D to duplicate, F2 to rename, Cmd+Z/Cmd+Shift+Z for undo/redo, Cmd+Shift+H for history panel). New tables are automatically positioned to avoid overlapping existing tables using `find_non_overlapping_position()`. Table deletion shows a confirmation dialog before proceeding (can be undone). Visual column order is stored in `SchemaDesignerState.visual_column_order` and is separate from the actual schema order. Key modules: `schema_designer/mod.rs` (state), `schema_designer/canvas.rs` (rendering, collision-free placement, crow's foot drawing), `schema_designer/diff.rs` (SQL generation, DDL generation), `schema_designer/actions.rs` (undo/redo with timestamps), `tabs/schema_designer.rs` (UI). Key function: `execute_migration()` in `postgres.rs`
-- **DDL Panel (GUI)**: The Schema Designer includes a resizable DDL (Data Definition Language) panel that shows the complete SQL to create all database objects in the working schema. Toggled via the "DDL" button in the toolbar, it displays CREATE TABLE statements with columns, constraints, primary keys, followed by CREATE INDEX statements and ALTER TABLE ADD CONSTRAINT for foreign keys (generated after tables to handle cross-table references). Features include: vertically resizable panel (drag the separator to resize, height stored in `ddl_panel_height`, range 100-600px), sorted output by table name for consistency, "Copy" button to copy DDL to clipboard, table count indicator, and proper handling of all constraint types (PRIMARY KEY, UNIQUE, CHECK, FOREIGN KEY). Key function: `generate_ddl_sql()` in `schema_designer/diff.rs`
-- **History Panel (GUI)**: The Schema Designer includes a timeline-based history panel (toggled via "History" button or Cmd+Shift+H) that displays all schema changes with timestamps. Features include: chronological action list with human-readable descriptions, relative timestamps (e.g., "2 mins ago", "Just now"), click-to-jump navigation to any point in history, visual indicators for current position (highlighted row with ">" marker) and future/redo-able actions (dimmed text), quick navigation buttons ("Start" and "End"), and current position indicator (e.g., "5/10"). The history system uses `TimestampedAction` which wraps `SchemaAction` with a `chrono::DateTime<Local>` timestamp. Key methods: `push_action()` (records with timestamp), `jump_to_action(index)` (navigate to any state), `undo()`/`redo()`. Actions are stored in `action_history: Vec<TimestampedAction>` with `action_index` tracking current position. Maximum 100 actions stored
-- **Table Properties Panel (GUI)**: A context-sensitive side panel that appears when a table is selected in the Schema Designer. Toggled via "Properties" button in toolbar (only visible when a table is selected). Features include: column list with quick delete buttons (x), inline "Add Column" form with name and type inputs for rapid column creation, buttons for adding indexes and foreign keys, and displays existing indexes and foreign keys. The panel enables rapid table modifications without opening dialogs. State stored in `SchemaDesignerState`: `properties_panel_visible` (bool), `properties_panel_width` (f32), `quick_add_column_name` and `quick_add_column_type` (form fields). Rendered by `render_table_properties_panel()` in `tabs/schema_designer.rs`
-- **Schema Templates (GUI)**: Pre-built database schema templates accessible via the "Templates" button in the Schema Designer toolbar. Templates are organized into two categories: Comprehensive Patterns (E-commerce, Blog/CMS, SaaS Authentication, Project Management, Social Media) and Minimal Starters (Users Table, Basic CRUD, Audit Logging). Each template generates complete tables with columns, indexes, foreign keys, and proper data types. Template preview shows all tables and their structure before applying. Templates integrate with the undo/redo system via batch actions. Key module: `schema_designer/templates.rs` containing `SchemaTemplate`, `TemplateCategory`, `get_all_templates()`, and individual template generation functions
-- **AI Chat-to-Schema (GUI)**: Natural language schema design using Claude API. The AI Assistant sidebar (toggled via "AI Assistant" button or Cmd+Shift+I) provides a chat interface where users can describe schema changes in plain English. The AI generates structured schema change proposals that can be previewed and applied with a single click. Features include: conversation history, configurable model selection and max tokens, schema context awareness (current tables sent with each request), and full undo/redo support for AI-generated changes. Key modules: `ai_chat/mod.rs` (state, `AiChatState`, `AiConfig`, `ChatMessage`, `SchemaChangeProposal`, `AVAILABLE_MODELS`), `ai_chat/claude_client.rs` (API integration, `generate_schema_changes()`, prompt engineering). Configuration accessible via Settings menu > AI Assistant
-- **Settings Menu (GUI)**: Top-level Settings menu in the menu bar providing access to application configuration. Currently includes: "AI Assistant..." for configuring the AI Schema Assistant. Settings include: API key (with status indicator), model selection (Claude Sonnet 4, Opus 4, 3.5 Sonnet, 3.5 Haiku), and max tokens (response length limit). All settings are persisted to `~/.dbctl/ai-config.json`. Key struct: `AiConfig` in `ai_chat/mod.rs` with `load()` and `save()` methods. Dialog rendered by `render_api_key_dialog()` in `dialogs.rs`
-- **Command Palette (GUI)**: Triggered by Cmd+K, the command palette provides fuzzy-searchable access to all 50+ app commands. Categories include: Cluster (install, create, start, stop, restart, remove), Database (create, drop, backup, restore), Table (insert, delete, export), Schema (create table, apply migration, undo/redo, history panel, jump to start/end), SQL (execute, explain, save), Users (create, refresh), Connections (add, edit, remove), and Navigation (tab switching). Key module: `command_palette.rs` containing `CommandId` enum, `CommandPaletteState`, `build_command_registry()`, `fuzzy_match()`, `filter_commands()`, `render_command_palette()`, and `execute_command()`
-- **Theme System (GUI)**: Dark/light mode support with system preference detection. Key module: `theme.rs` containing `ThemeMode` enum (Light/Dark/System), `Theme` struct with all color definitions, `GuiConfig` for persistence. Theme accessible via View > Theme menu. Preference stored in `~/.dbctl/gui-config.json`. All GUI components use `theme.field` for colors instead of hardcoded values
-- The primary use case for this tool is development and testing
-- Best practices for CLI apps should be used when adding or updating features
-- Always update @README.md, @QUICKSTART.md, and @CLAUDE.md after making changes to ensure they reflect the current code
+- Clusters use `trust` authentication in `pg_hba.conf` for local connections
+- `use` command runs a built-in SQL REPL via `tokio-postgres::Client::simple_query()` and `rustyline` -- does not require PostgreSQL binaries, unlike `shell`/`exec`
+- `shell`, `exec`, `backup`, `restore` spawn PostgreSQL binaries (psql, pg_dump) from the cluster's version directory via `get_version_dir()`
+- Schema designer visual column order (`SchemaDesignerState.visual_column_order`) is separate from the actual database schema order
+- Schema designer undo/redo uses `TimestampedAction` wrapping `SchemaAction` with `chrono::DateTime<Local>`, max 100 actions
+- All GUI colors come from `Theme` struct fields, never hardcoded -- required for dark/light mode support
+- Always update README.md, QUICKSTART.md, and CLAUDE.md after making changes to ensure they reflect the current code
 - Always run all tests after each change to verify everything still works
-
-## Documentation Structure
-
-- `README.md` - Main documentation with feature overview, installation instructions, and command reference
-- `QUICKSTART.md` - Comprehensive quick start guide with practical examples demonstrating most features
-- `CLAUDE.md` - This file - technical guidance for AI assistants working with the codebase

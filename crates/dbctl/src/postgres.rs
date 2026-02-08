@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use crate::connection::{connect, ConnectionSource};
+use crate::connection::{ConnectionSource, connect};
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum GrantTarget {
@@ -1587,7 +1587,10 @@ pub async fn update_cell(
     new_value: Option<&str>,
 ) -> Result<()> {
     let source = ConnectionSource::from_cluster(cluster)?;
-    update_cell_with_source(&source, database, schema, table, pk_column, pk_value, column, new_value).await
+    update_cell_with_source(
+        &source, database, schema, table, pk_column, pk_value, column, new_value,
+    )
+    .await
 }
 
 /// Delete a row using a connection source
@@ -1626,11 +1629,7 @@ pub async fn delete_row(
 }
 
 /// Execute migration statements in a transaction
-pub async fn execute_migration(
-    cluster: &str,
-    database: &str,
-    statements: &[String],
-) -> Result<()> {
+pub async fn execute_migration(cluster: &str, database: &str, statements: &[String]) -> Result<()> {
     let source = ConnectionSource::from_cluster(cluster)?;
     execute_migration_with_source(&source, database, statements).await
 }
@@ -1700,4 +1699,241 @@ pub fn export_to_csv(data: &TableDataResult) -> String {
 /// Export table data to JSON format
 pub fn export_to_json(data: &TableDataResult) -> Result<String> {
     Ok(serde_json::to_string_pretty(&data.rows)?)
+}
+
+// ============================================
+// Interactive SQL REPL
+// ============================================
+
+/// Run an interactive SQL REPL connected to the specified database
+pub async fn run_repl(cluster: &str, database: &str) -> Result<()> {
+    use colored::Colorize;
+
+    let source = ConnectionSource::from_cluster(cluster)?;
+    let (client, _handle) = crate::connection::connect(&source, Some(database)).await?;
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+
+    println!(
+        "Connected to {} on {} (PostgreSQL {})",
+        database.cyan().bold(),
+        cluster.cyan(),
+        metadata.version
+    );
+    println!(
+        "Type {} to quit, {} for help.\n",
+        "\\q".green(),
+        "\\?".green()
+    );
+
+    let mut rl = rustyline::DefaultEditor::new()?;
+    let history_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".dbctl")
+        .join("repl_history");
+    let _ = rl.load_history(&history_path);
+
+    let prompt = format!("{}=> ", database);
+    let cont_prompt = format!("{}-> ", database);
+    let mut buffer = String::new();
+
+    loop {
+        let p = if buffer.is_empty() {
+            &prompt
+        } else {
+            &cont_prompt
+        };
+        match rl.readline(p) {
+            Ok(line) => {
+                let trimmed = line.trim();
+
+                // Handle backslash commands when buffer is empty
+                if buffer.is_empty() {
+                    if trimmed == "\\q" || trimmed == "quit" || trimmed == "exit" {
+                        break;
+                    }
+                    if trimmed == "\\?" || trimmed == "\\help" {
+                        print_repl_help();
+                        continue;
+                    }
+                    if trimmed == "\\dt" {
+                        let sql = "SELECT table_name as \"Name\", table_type as \"Type\" FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name";
+                        execute_and_display(&client, sql).await;
+                        continue;
+                    }
+                    if trimmed == "\\l" {
+                        let sql = "SELECT datname as \"Name\", pg_size_pretty(pg_database_size(datname)) as \"Size\" FROM pg_database WHERE datistemplate = false ORDER BY datname";
+                        execute_and_display(&client, sql).await;
+                        continue;
+                    }
+                    if let Some(table) = trimmed.strip_prefix("\\d ") {
+                        let table = table.trim();
+                        let sql = format!(
+                            "SELECT column_name as \"Column\", data_type as \"Type\", \
+                             is_nullable as \"Nullable\", column_default as \"Default\" \
+                             FROM information_schema.columns \
+                             WHERE table_schema = 'public' AND table_name = '{}' \
+                             ORDER BY ordinal_position",
+                            table.replace('\'', "''")
+                        );
+                        execute_and_display(&client, &sql).await;
+                        continue;
+                    }
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                }
+
+                if !buffer.is_empty() {
+                    buffer.push('\n');
+                }
+                buffer.push_str(&line);
+
+                // Execute when statement ends with semicolon
+                if buffer.trim_end().ends_with(';') {
+                    let sql = buffer.trim().to_string();
+                    let _ = rl.add_history_entry(&sql);
+                    execute_and_display(&client, &sql).await;
+                    buffer.clear();
+                }
+            }
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                if !buffer.is_empty() {
+                    buffer.clear();
+                    println!();
+                }
+            }
+            Err(rustyline::error::ReadlineError::Eof) => {
+                break;
+            }
+            Err(err) => {
+                eprintln!("Error: {}", err);
+                break;
+            }
+        }
+    }
+
+    let _ = rl.save_history(&history_path);
+    println!("Goodbye.");
+    Ok(())
+}
+
+fn print_repl_help() {
+    println!("Available commands:");
+    println!("  \\q         Quit");
+    println!("  \\dt        List tables");
+    println!("  \\d TABLE   Describe a table");
+    println!("  \\l         List databases");
+    println!("  \\?         Show this help");
+    println!();
+    println!("Enter SQL statements terminated with a semicolon (;).");
+    println!("Multi-line statements are supported.");
+    println!();
+}
+
+async fn execute_and_display(client: &tokio_postgres::Client, sql: &str) {
+    use tokio_postgres::SimpleQueryMessage;
+
+    let start = std::time::Instant::now();
+
+    match client.simple_query(sql).await {
+        Ok(messages) => {
+            let elapsed = start.elapsed();
+            let mut columns: Vec<String> = Vec::new();
+            let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+
+            for msg in messages {
+                match msg {
+                    SimpleQueryMessage::Row(row) => {
+                        if columns.is_empty() {
+                            columns = row.columns().iter().map(|c| c.name().to_string()).collect();
+                        }
+                        let values: Vec<Option<String>> = (0..row.columns().len())
+                            .map(|i| row.get(i).map(|s| s.to_string()))
+                            .collect();
+                        rows.push(values);
+                    }
+                    SimpleQueryMessage::CommandComplete(count) => {
+                        if !columns.is_empty() {
+                            print_result_table(&columns, &rows);
+                            println!(
+                                "({} row{})",
+                                rows.len(),
+                                if rows.len() == 1 { "" } else { "s" }
+                            );
+                            columns.clear();
+                            rows.clear();
+                        } else if count > 0 {
+                            println!(
+                                "{} row{} affected",
+                                count,
+                                if count == 1 { "" } else { "s" }
+                            );
+                        } else {
+                            println!("OK");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if elapsed.as_millis() >= 1 {
+                println!("Time: {:.3}s", elapsed.as_secs_f64());
+            }
+            println!();
+        }
+        Err(e) => {
+            eprintln!("ERROR: {}\n", e);
+        }
+    }
+}
+
+fn print_result_table(columns: &[String], rows: &[Vec<Option<String>>]) {
+    if columns.is_empty() {
+        return;
+    }
+
+    // Calculate column widths
+    let mut widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    for row in rows {
+        for (i, val) in row.iter().enumerate() {
+            if i < widths.len() {
+                let len = val.as_ref().map_or(0, |s| s.len());
+                widths[i] = widths[i].max(len);
+            }
+        }
+    }
+
+    // Header
+    let header: String = columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!(" {:<width$} ", c, width = widths[i]))
+        .collect::<Vec<_>>()
+        .join("|");
+    println!("{}", header);
+
+    // Separator
+    let separator: String = widths
+        .iter()
+        .map(|w| "-".repeat(w + 2))
+        .collect::<Vec<_>>()
+        .join("+");
+    println!("{}", separator);
+
+    // Rows
+    for row in rows {
+        let line: String = row
+            .iter()
+            .enumerate()
+            .map(|(i, val)| {
+                let w = if i < widths.len() { widths[i] } else { 0 };
+                match val {
+                    Some(s) => format!(" {:<width$} ", s, width = w),
+                    None => format!(" {:<width$} ", "", width = w),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        println!("{}", line);
+    }
 }

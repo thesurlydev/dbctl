@@ -76,7 +76,7 @@ dbctl install 16.3        # Install PostgreSQL
 dbctl init mydev          # Create a cluster (interactive)
 dbctl start               # Start the cluster
 dbctl createdb myapp      # Create a database
-dbctl shell myapp         # Open interactive shell
+dbctl use myapp           # Start interactive SQL REPL
 ```
 
 ## Command Overview
@@ -121,6 +121,14 @@ dbctl install <VERSION>
 ```
 
 Example: `dbctl install 16.3`
+
+#### List Available Versions
+
+```bash
+dbctl versions
+```
+
+Shows all PostgreSQL versions available to install, marking which are already installed.
 
 #### Initialize a Cluster (Interactive)
 
@@ -218,11 +226,28 @@ dbctl databases [-c cluster]
 
 Without a cluster argument, shows databases for all clusters.
 
-#### Open Interactive Shell
+#### Interactive SQL REPL
+
+```bash
+dbctl use <database> [-c cluster]
+```
+
+Opens a built-in SQL REPL connected to the specified database. Supports multi-line
+statements, command history, and psql-style backslash commands (`\dt`, `\d table`, `\l`, `\q`).
+
+Examples:
+```bash
+dbctl use myapp                # Start REPL for myapp database
+dbctl use myapp -c production  # Explicit cluster
+```
+
+#### Open Interactive Shell (psql)
 
 ```bash
 dbctl shell [database] [-c cluster]
 ```
+
+Opens the native `psql` shell (requires PostgreSQL binaries).
 
 Examples:
 ```bash
