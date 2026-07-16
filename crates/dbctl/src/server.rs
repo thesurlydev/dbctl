@@ -1,6 +1,7 @@
 // src/server.rs
 use anyhow::{Result, bail};
 use clap::Subcommand;
+use colored::Colorize;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
@@ -9,11 +10,23 @@ use std::path::PathBuf;
 use std::process::Command;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
+/// Available PostgreSQL versions and their latest minor releases (newest first).
+/// This is the source of truth used by both `normalize_version()` and `list_available_versions()`.
+/// See https://www.enterprisedb.com/software-downloads-postgres for the latest versions.
+pub const AVAILABLE_VERSIONS: &[(&str, &str)] = &[
+    ("18", "18.4"),
+    ("17", "17.10"),
+    ("16", "16.14"),
+    ("15", "15.18"),
+    ("14", "14.23"),
+    ("13", "13.23"),
+];
+
 #[derive(Subcommand)]
 pub enum ServerAction {
     /// Install PostgreSQL version
     Install {
-        /// PostgreSQL version (e.g., 16.3, 15.7, 14.12)
+        /// PostgreSQL version
         #[arg(long)]
         version: String,
     },
@@ -259,21 +272,33 @@ fn normalize_version(version: &str) -> String {
     let parts: Vec<&str> = version.split('.').collect();
     match parts.len() {
         1 => {
-            // Map major version to latest minor version (as of November 2025)
-            let latest_version = match parts[0] {
-                "18" => "18.1",
-                "17" => "17.7",
-                "16" => "16.11",
-                "15" => "15.15",
-                "14" => "14.20",
-                "13" => "13.23",
-                // For unknown versions, default to .0
-                _ => return format!("{}.0", version),
-            };
-            latest_version.to_string()
+            for (major, full) in AVAILABLE_VERSIONS {
+                if *major == parts[0] {
+                    return full.to_string();
+                }
+            }
+            // For unknown versions, default to .0
+            format!("{}.0", version)
         }
         _ => version.to_string(),
     }
+}
+
+pub fn list_available_versions() -> Result<()> {
+    let installed = get_installed_versions()?;
+
+    println!("Available PostgreSQL versions:\n");
+
+    for (_major, full_version) in AVAILABLE_VERSIONS {
+        let is_installed = installed.iter().any(|v| v == full_version);
+        if is_installed {
+            println!("  {}     {}", full_version, "(installed)".green());
+        } else {
+            println!("  {}", full_version);
+        }
+    }
+
+    Ok(())
 }
 
 async fn install_postgres_macos(version: &str, install_dir: &PathBuf, _arch: &str) -> Result<()> {
@@ -601,7 +626,7 @@ pub fn load_cluster_metadata(name: &str) -> Result<ClusterMetadata> {
 }
 
 pub fn find_unused_port() -> Result<u16> {
-    use rand::Rng;
+    use rand::RngExt;
 
     // Get all ports currently in use by clusters
     let clusters = get_all_clusters()?;
@@ -1103,11 +1128,11 @@ mod tests {
     #[test]
     fn test_normalize_version_major_only() {
         // Test that major versions map to latest minor versions
-        assert_eq!(normalize_version("18"), "18.1");
-        assert_eq!(normalize_version("17"), "17.7");
-        assert_eq!(normalize_version("16"), "16.11");
-        assert_eq!(normalize_version("15"), "15.15");
-        assert_eq!(normalize_version("14"), "14.20");
+        assert_eq!(normalize_version("18"), "18.4");
+        assert_eq!(normalize_version("17"), "17.10");
+        assert_eq!(normalize_version("16"), "16.14");
+        assert_eq!(normalize_version("15"), "15.18");
+        assert_eq!(normalize_version("14"), "14.23");
         assert_eq!(normalize_version("13"), "13.23");
     }
 

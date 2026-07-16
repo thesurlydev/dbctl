@@ -1,0 +1,11 @@
+[tasks.dev]
+description = "Build the project in debug mode"
+run = "cargo build"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test -- --test-threads=1"
+
+[tasks.install]
+description = "Install dbctl to ~/.cargo/bin"
+run = "cargo install --path crates/dbctl"

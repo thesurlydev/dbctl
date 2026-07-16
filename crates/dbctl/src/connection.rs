@@ -1,6 +1,6 @@
 // Connection management for remote PostgreSQL servers
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio_postgres::Client;
@@ -40,7 +40,12 @@ impl ConnectionProfile {
         let db = database.unwrap_or(&self.database);
         format!(
             "host={} port={} user={} password='{}' dbname={} sslmode={}",
-            self.host, self.port, self.username, self.password, db, self.ssl_mode.as_str()
+            self.host,
+            self.port,
+            self.username,
+            self.password,
+            db,
+            self.ssl_mode.as_str()
         )
     }
 }
@@ -219,9 +224,8 @@ pub async fn connect(
 
     if source.requires_tls() {
         // Create TLS connector using rustls
-        let root_store = rustls::RootCertStore::from_iter(
-            webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
-        );
+        let root_store =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
