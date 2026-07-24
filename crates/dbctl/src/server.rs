@@ -305,17 +305,30 @@ async fn install_postgres_macos(version: &str, install_dir: &PathBuf, _arch: &st
     // EDB provides universal binaries for macOS
     // Normalize version (e.g., "17" -> "17.7") to latest minor version for URL compatibility
     let normalized_version = normalize_version(version);
-    let url = format!(
-        "https://get.enterprisedb.com/postgresql/postgresql-{}-1-osx-binaries.zip",
-        normalized_version
-    );
-
-    println!("Downloading from: {}", url);
 
     fs::create_dir_all(install_dir)?;
 
-    // Download and extract zip
-    download_and_extract_zip(&url, install_dir).await?;
+    // Use "universal" for cache key since macOS binaries work on all architectures
+    let os = "macos";
+    let cache_arch = "universal";
+
+    if crate::cache::is_cached(&normalized_version, os, cache_arch)? {
+        println!("✓ Found in cache, extracting...");
+        let cache_path = crate::cache::get_cache_path(&normalized_version, os, cache_arch)?;
+        extract_zip_from_file(&cache_path, install_dir)?;
+    } else {
+        let url = format!(
+            "https://get.enterprisedb.com/postgresql/postgresql-{}-1-osx-binaries.zip",
+            normalized_version
+        );
+        println!("Downloading from: {}", url);
+
+        let data = download_binary(&url).await?;
+        println!("✓ Saving to cache...");
+        let cache_path = crate::cache::save_to_cache(&normalized_version, os, cache_arch, &data)?;
+
+        extract_zip_from_file(&cache_path, install_dir)?;
+    }
 
     // The extracted structure is pgsql/
     let pgsql_dir = install_dir.join("pgsql");
@@ -339,17 +352,28 @@ async fn install_postgres_linux(version: &str, install_dir: &PathBuf, arch: &str
 
     // Normalize version (e.g., "17" -> "17.7") to latest minor version for URL compatibility
     let normalized_version = normalize_version(version);
-    let url = format!(
-        "https://get.enterprisedb.com/postgresql/postgresql-{}-1-linux-{}-binaries.tar.gz",
-        normalized_version, arch_str
-    );
-
-    println!("Downloading from: {}", url);
 
     fs::create_dir_all(install_dir)?;
 
-    // Download and extract tar.gz
-    download_and_extract_targz(&url, install_dir).await?;
+    // Check cache first - Linux binaries are cached per-architecture
+    let os = "linux";
+    if crate::cache::is_cached(&normalized_version, os, arch_str)? {
+        println!("✓ Found in cache, extracting...");
+        let cache_path = crate::cache::get_cache_path(&normalized_version, os, arch_str)?;
+        extract_targz_from_file(&cache_path, install_dir)?;
+    } else {
+        let url = format!(
+            "https://get.enterprisedb.com/postgresql/postgresql-{}-1-linux-{}-binaries.tar.gz",
+            normalized_version, arch_str
+        );
+        println!("Downloading from: {}", url);
+
+        let data = download_binary(&url).await?;
+        println!("✓ Saving to cache...");
+        let cache_path = crate::cache::save_to_cache(&normalized_version, os, arch_str, &data)?;
+
+        extract_targz_from_file(&cache_path, install_dir)?;
+    }
 
     // The extracted structure is pgsql/
     let pgsql_dir = install_dir.join("pgsql");
@@ -368,7 +392,7 @@ async fn install_postgres_linux(version: &str, install_dir: &PathBuf, arch: &str
     Ok(())
 }
 
-async fn download_and_extract_targz(url: &str, dest_dir: &std::path::Path) -> Result<()> {
+async fn download_binary(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
@@ -394,10 +418,14 @@ async fn download_and_extract_targz(url: &str, dest_dir: &std::path::Path) -> Re
 
     pb.finish_with_message("Download complete");
 
+    Ok(buffer)
+}
+
+fn extract_targz_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
     println!("Extracting...");
 
-    // Decompress and extract
-    let decoder = flate2::read::GzDecoder::new(&buffer[..]);
+    let file = fs::File::open(file_path)?;
+    let decoder = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
     archive.unpack(dest_dir)?;
 
@@ -406,37 +434,11 @@ async fn download_and_extract_targz(url: &str, dest_dir: &std::path::Path) -> Re
     Ok(())
 }
 
-async fn download_and_extract_zip(url: &str, dest_dir: &std::path::Path) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()?;
-
-    let response = client.get(url).send().await?;
-    let total_size = response.content_length().unwrap_or(0);
-
-    let pb = ProgressBar::new(total_size);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
-        .progress_chars("#>-"));
-
-    let mut downloaded = 0u64;
-    let mut stream = response.bytes_stream();
-    let mut buffer = Vec::new();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        buffer.extend_from_slice(&chunk);
-        downloaded += chunk.len() as u64;
-        pb.set_position(downloaded);
-    }
-
-    pb.finish_with_message("Download complete");
-
+fn extract_zip_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
     println!("Extracting...");
 
-    // Extract zip archive
-    let cursor = std::io::Cursor::new(buffer);
-    let mut archive = zip::ZipArchive::new(cursor)?;
+    let file = fs::File::open(file_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;

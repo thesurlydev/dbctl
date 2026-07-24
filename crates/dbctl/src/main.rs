@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 use dbctl::context::Context;
-use dbctl::{postgres, server};
+use dbctl::{cache, postgres, server};
 
 #[derive(Parser)]
 #[command(name = "dbctl")]
@@ -25,6 +25,12 @@ enum Commands {
 
     /// List available PostgreSQL versions
     Versions,
+
+    /// Manage the local PostgreSQL binary cache
+    Cache {
+        #[command(subcommand)]
+        action: cache::CacheAction,
+    },
 
     /// Initialize a new database cluster (interactive if args missing)
     Init {
@@ -257,6 +263,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Versions) => {
             server::list_available_versions()?;
+        }
+        Some(Commands::Cache { action }) => {
+            cache::handle_action(action)?;
         }
         Some(Commands::Init {
             name,

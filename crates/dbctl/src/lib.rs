@@ -1,10 +1,12 @@
 // dbctl - PostgreSQL version and database manager library
 
+pub mod cache;
 pub mod connection;
 pub mod context;
 pub mod postgres;
 pub mod server;
 
+pub use cache::{CacheAction, CacheStats};
 pub use connection::{
     ConnectionProfile, ConnectionSource, ConnectionStore, SslMode, connect, test_connection,
 };

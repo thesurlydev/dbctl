@@ -25,6 +25,8 @@ dbctl install 15.4
 dbctl install 17.0
 ```
 
+Downloaded binaries are cached locally, so reinstalling a version you've already downloaded (e.g. after `dbctl remove`) skips the network download entirely.
+
 ### Create Your First Cluster
 
 Create a cluster interactively (prompts for missing options):
@@ -401,6 +403,18 @@ Always check status before making changes:
 dbctl                      # Shows all clusters
 dbctl databases            # Shows all databases
 dbctl users                # Shows all users
+```
+
+## Managing the Binary Cache
+
+dbctl caches downloaded PostgreSQL archives so you don't re-download them on future installs.
+
+```bash
+# Show cache location, file count, and total size
+dbctl cache stats
+
+# Remove all cached archives
+dbctl cache clear
 ```
 
 ## Connecting External Tools

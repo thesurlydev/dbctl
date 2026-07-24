@@ -7,6 +7,7 @@ Designed for local development with smart defaults - minimal typing, auto-select
 ## Features
 
 - Install multiple PostgreSQL versions side-by-side
+- Local binary cache speeds up repeat installs and reinstalls
 - Create and manage isolated database clusters
 - Start, stop, restart, and reload cluster configurations
 - Monitor cluster status and view logs
@@ -48,6 +49,8 @@ All data is stored in `~/.dbctl/`:
 ```
 ~/.dbctl/
 ├── context.json       # Remembers last-used cluster
+├── cache/
+│   └── postgres/      # Downloaded binary archives, reused across installs
 ├── versions/
 │   └── 16.3/          # PostgreSQL binaries
 │       ├── bin/
@@ -58,6 +61,18 @@ All data is stored in `~/.dbctl/`:
         ├── data/      # PostgreSQL data directory
         ├── logs/      # Log files
         └── metadata.json  # Cluster configuration
+```
+
+## Binary Cache
+
+`dbctl install` caches downloaded PostgreSQL archives locally, keyed by version, OS, and architecture, so reinstalling a version (e.g. after `dbctl remove`) skips the download.
+
+```bash
+# Show cache location, file count, and total size
+dbctl cache stats
+
+# Remove all cached archives
+dbctl cache clear
 ```
 
 ## Requirements
