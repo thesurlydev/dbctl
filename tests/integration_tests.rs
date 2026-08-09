@@ -1216,3 +1216,113 @@ fn test_db_exec_file() {
 
     cleanup_test_cluster(cluster_name);
 }
+
+#[test]
+fn test_extension_install_enable_list_uninstall() {
+    let cluster_name = "test_extension_cluster";
+    cleanup_test_cluster(cluster_name);
+
+    // Requires at least one installed PostgreSQL version.
+    let versions_output = dbctl_command()
+        .args(["versions"])
+        .output()
+        .expect("Failed to execute command");
+    let versions_stdout = String::from_utf8_lossy(&versions_output.stdout);
+    let version = versions_stdout
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            l.strip_prefix("*")
+                .or_else(|| l.strip_prefix("-"))
+                .map(str::trim)
+        })
+        .find(|l| l.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(String::from);
+    let Some(version) = version else {
+        eprintln!("skipping: no installed PostgreSQL version found");
+        return;
+    };
+
+    let output = dbctl_command()
+        .args([
+            "init",
+            cluster_name,
+            "--version",
+            &version,
+            "--username",
+            "postgres",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success(), "Init failed");
+
+    let output = dbctl_command()
+        .args(["start", cluster_name])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success(), "Start failed");
+
+    let output = dbctl_command()
+        .args(["extension", "install", "pgvector", "--cluster", cluster_name])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "extension install failed: {stdout} {stderr}"
+    );
+
+    let output = dbctl_command()
+        .args([
+            "extension",
+            "enable",
+            "pgvector",
+            "--cluster",
+            cluster_name,
+            "--database",
+            "postgres",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success(), "extension enable failed");
+
+    let output = dbctl_command()
+        .args([
+            "exec",
+            "--cluster",
+            cluster_name,
+            "--database",
+            "postgres",
+            "--sql",
+            "SELECT '[1,2,3]'::vector AS v;",
+        ])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[1,2,3]"), "vector type not usable: {stdout}");
+
+    let output = dbctl_command()
+        .args(["extension", "list", "--cluster", cluster_name])
+        .output()
+        .expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("vector"), "vector not listed: {stdout}");
+
+    let output = dbctl_command()
+        .args([
+            "extension",
+            "uninstall",
+            "pgvector",
+            "--cluster",
+            cluster_name,
+        ])
+        .output()
+        .expect("Failed to execute command");
+    assert!(output.status.success(), "extension uninstall failed");
+
+    let _ = dbctl_command()
+        .args(["stop", cluster_name])
+        .output();
+    cleanup_test_cluster(cluster_name);
+}

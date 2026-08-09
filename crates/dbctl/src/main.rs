@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 
 use dbctl::context::Context;
-use dbctl::{cache, postgres, server};
+use dbctl::{cache, extension, postgres, server};
 
 #[derive(Parser)]
 #[command(name = "dbctl")]
@@ -223,6 +223,12 @@ enum Commands {
         /// Cluster name (optional - auto-selected)
         #[arg(long, short = 'c')]
         cluster: Option<String>,
+    },
+
+    /// Manage PostgreSQL extensions (build, install, enable)
+    Extension {
+        #[command(subcommand)]
+        action: extension::ExtensionAction,
     },
 
     /// Connect to a database and start an interactive SQL REPL
@@ -449,6 +455,9 @@ async fn main() -> Result<()> {
                 action: postgres::UserAction::List { cluster },
             })
             .await?;
+        }
+        Some(Commands::Extension { action }) => {
+            extension::handle_action(action)?;
         }
         Some(Commands::Use { database, cluster }) => {
             let cluster = resolve_cluster(cluster)?;

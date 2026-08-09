@@ -3,6 +3,7 @@
 pub mod cache;
 pub mod connection;
 pub mod context;
+pub mod extension;
 pub mod postgres;
 pub mod server;
 
@@ -11,6 +12,7 @@ pub use connection::{
     ConnectionProfile, ConnectionSource, ConnectionStore, SslMode, connect, test_connection,
 };
 pub use context::Context;
+pub use extension::ExtensionAction;
 pub use postgres::{
     ClusterStats,
     ColumnInfo,
