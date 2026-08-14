@@ -875,7 +875,7 @@ async fn revoke_privileges(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UserInfo {
     pub name: String,
     pub superuser: bool,

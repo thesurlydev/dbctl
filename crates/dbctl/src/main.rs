@@ -24,7 +24,11 @@ enum Commands {
     },
 
     /// List available PostgreSQL versions
-    Versions,
+    Versions {
+        /// Output installed versions as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Manage the local PostgreSQL binary cache
     Cache {
@@ -78,11 +82,19 @@ enum Commands {
     Status {
         /// Cluster name (optional - shows all if omitted)
         name: Option<String>,
+
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
     },
 
     /// List everything (alias: ls)
     #[command(alias = "ls")]
-    List,
+    List {
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Remove a cluster
     #[command(alias = "rm")]
@@ -140,6 +152,10 @@ enum Commands {
         /// Cluster name (optional - shows all if omitted)
         #[arg(long, short = 'c')]
         cluster: Option<String>,
+
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
     },
 
     /// Open interactive psql shell
@@ -223,6 +239,10 @@ enum Commands {
         /// Cluster name (optional - auto-selected)
         #[arg(long, short = 'c')]
         cluster: Option<String>,
+
+        /// Output as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
     },
 
     /// Manage PostgreSQL extensions (build, install, enable)
@@ -267,8 +287,13 @@ async fn main() -> Result<()> {
         Some(Commands::Install { version }) => {
             server::handle_action(server::ServerAction::Install { version }).await?;
         }
-        Some(Commands::Versions) => {
-            server::list_available_versions()?;
+        Some(Commands::Versions { json }) => {
+            if json {
+                let installed = server::get_installed_versions()?;
+                println!("{}", serde_json::to_string(&installed)?);
+            } else {
+                server::list_available_versions()?;
+            }
         }
         Some(Commands::Cache { action }) => {
             cache::handle_action(action)?;
@@ -302,15 +327,29 @@ async fn main() -> Result<()> {
             let cluster = resolve_cluster(name)?;
             server::handle_action(server::ServerAction::Reload { name: cluster }).await?;
         }
-        Some(Commands::Status { name }) => {
-            if let Some(cluster) = name {
+        Some(Commands::Status { name, json }) => {
+            if json {
+                if let Some(cluster) = name {
+                    let metadata = server::load_cluster_metadata(&cluster)?;
+                    println!(
+                        "{}",
+                        serde_json::to_string(&cluster_json(&cluster, &metadata))?
+                    );
+                } else {
+                    println!("{}", serde_json::to_string(&all_clusters_json()?)?);
+                }
+            } else if let Some(cluster) = name {
                 server::handle_action(server::ServerAction::Status { name: cluster }).await?;
             } else {
                 show_all_status().await?;
             }
         }
-        Some(Commands::List) => {
-            show_list().await?;
+        Some(Commands::List { json }) => {
+            if json {
+                println!("{}", serde_json::to_string(&all_clusters_json()?)?);
+            } else {
+                show_list().await?;
+            }
         }
         Some(Commands::Remove { name, force }) => {
             if !force {
@@ -358,11 +397,18 @@ async fn main() -> Result<()> {
             .await?;
             save_context(&cluster)?;
         }
-        Some(Commands::Databases { cluster }) => {
+        Some(Commands::Databases { cluster, json }) => {
             if let Some(cluster_name) = cluster {
                 let cluster = resolve_cluster(Some(cluster_name))?;
                 server::ensure_cluster_running(&cluster)?;
-                postgres::handle_action(postgres::DbAction::List { cluster }).await?;
+                if json {
+                    let databases = postgres::list_databases(&cluster).await?;
+                    println!("{}", serde_json::to_string(&databases)?);
+                } else {
+                    postgres::handle_action(postgres::DbAction::List { cluster }).await?;
+                }
+            } else if json {
+                bail!("--json requires --cluster");
             } else {
                 show_all_databases().await?;
             }
@@ -448,13 +494,18 @@ async fn main() -> Result<()> {
             .await?;
             save_context(&cluster)?;
         }
-        Some(Commands::Users { cluster }) => {
+        Some(Commands::Users { cluster, json }) => {
             let cluster = resolve_cluster(cluster)?;
             server::ensure_cluster_running(&cluster)?;
-            postgres::handle_action(postgres::DbAction::User {
-                action: postgres::UserAction::List { cluster },
-            })
-            .await?;
+            if json {
+                let users = postgres::list_users(&cluster).await?;
+                println!("{}", serde_json::to_string(&users)?);
+            } else {
+                postgres::handle_action(postgres::DbAction::User {
+                    action: postgres::UserAction::List { cluster },
+                })
+                .await?;
+            }
         }
         Some(Commands::Extension { action }) => {
             extension::handle_action(action)?;
@@ -534,6 +585,38 @@ fn format_cluster_list(clusters: &[(String, server::ClusterMetadata)]) -> String
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[derive(serde::Serialize)]
+struct ClusterJson {
+    name: String,
+    version: String,
+    port: u16,
+    username: String,
+    status: String,
+}
+
+fn cluster_json(name: &str, metadata: &server::ClusterMetadata) -> ClusterJson {
+    let status = if server::is_cluster_running(name).unwrap_or(false) {
+        "running"
+    } else {
+        "stopped"
+    };
+    ClusterJson {
+        name: name.to_string(),
+        version: metadata.version.clone(),
+        port: metadata.port,
+        username: metadata.username.clone(),
+        status: status.to_string(),
+    }
+}
+
+fn all_clusters_json() -> Result<Vec<ClusterJson>> {
+    let clusters = server::get_all_clusters()?;
+    Ok(clusters
+        .iter()
+        .map(|(name, metadata)| cluster_json(name, metadata))
+        .collect())
 }
 
 async fn show_overview() -> Result<()> {
