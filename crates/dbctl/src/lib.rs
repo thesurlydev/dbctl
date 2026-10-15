@@ -14,6 +14,7 @@ pub use connection::{
 pub use context::Context;
 pub use extension::ExtensionAction;
 pub use postgres::{
+    Cell,
     ClusterStats,
     ColumnInfo,
     ConstraintInfo,

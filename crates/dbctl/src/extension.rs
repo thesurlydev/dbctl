@@ -113,7 +113,13 @@ pub fn handle_action(action: ExtensionAction) -> Result<()> {
             git_tag,
             source,
             force,
-        } => install(&name, &cluster, git_tag.as_deref(), source.as_deref(), force),
+        } => install(
+            &name,
+            &cluster,
+            git_tag.as_deref(),
+            source.as_deref(),
+            force,
+        ),
         ExtensionAction::Enable {
             name,
             cluster,
@@ -237,8 +243,7 @@ fn install(
     }
 
     // Confirm the shared library landed too.
-    let so = PathBuf::from(&lib_dir)
-        .join(format!("{}.dylib", sql_extension_name(name)));
+    let so = PathBuf::from(&lib_dir).join(format!("{}.dylib", sql_extension_name(name)));
     let so_alt = so.with_extension("so");
     if !so.exists() && !so_alt.exists() {
         eprintln!(
@@ -310,10 +315,10 @@ fn list(cluster: &str) -> Result<()> {
         for entry in fs::read_dir(&ext_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("control") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    found.push(stem.to_string());
-                }
+            if path.extension().and_then(|e| e.to_str()) == Some("control")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                found.push(stem.to_string());
             }
         }
     }
@@ -343,8 +348,8 @@ fn uninstall(name: &str, cluster: &str) -> Result<()> {
         let entry = entry?;
         let fname = entry.file_name().to_string_lossy().to_string();
         if fname == format!("{}.control", sql_name)
-            || (fname.starts_with(&format!("{}--", sql_name)) && fname.ends_with(".sql")
-        ) {
+            || (fname.starts_with(&format!("{}--", sql_name)) && fname.ends_with(".sql"))
+        {
             fs::remove_file(entry.path())?;
             removed += 1;
         }
@@ -412,19 +417,19 @@ fn detect_sysroot(pg_config: &PathBuf) -> Result<Option<String>> {
         .skip_while(|t| *t != "-isysroot")
         .nth(1);
 
-    if let Some(path) = expected {
-        if PathBuf::from(path).exists() {
-            return Ok(None); // The SDK the binaries expect is present.
-        }
+    if let Some(path) = expected
+        && PathBuf::from(path).exists()
+    {
+        return Ok(None); // The SDK the binaries expect is present.
     }
 
     // Prefer the SDK from the active developer directory.
-    if let Ok(output) = Command::new("xcrun").args(["--show-sdk-path"]).output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() && PathBuf::from(&path).exists() {
-                return Ok(Some(path));
-            }
+    if let Ok(output) = Command::new("xcrun").args(["--show-sdk-path"]).output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() && PathBuf::from(&path).exists() {
+            return Ok(Some(path));
         }
     }
 

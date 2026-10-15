@@ -997,8 +997,8 @@ pub async fn get_cluster_stats_with_source(source: &ConnectionSource) -> Result<
         let dbname: String = db_row.get(0);
 
         // Connect to each database to count tables
-        if let Ok((db_client, _db_handle)) = connect(source, Some(&dbname)).await {
-            if let Ok(table_row) = db_client
+        if let Ok((db_client, _db_handle)) = connect(source, Some(&dbname)).await
+            && let Ok(table_row) = db_client
                 .query_one(
                     "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
                     &[],
@@ -1008,7 +1008,6 @@ pub async fn get_cluster_stats_with_source(source: &ConnectionSource) -> Result<
                 let count: i64 = table_row.get(0);
                 table_count += count;
             }
-        }
     }
 
     Ok(ClusterStats {
@@ -1532,17 +1531,30 @@ pub async fn insert_row(
     insert_row_with_source(&source, database, schema, table, values).await
 }
 
+/// One cell of a table: `column` in the row whose `pk_column` equals `pk_value`.
+#[derive(Debug, Clone, Copy)]
+pub struct Cell<'a> {
+    pub schema: &'a str,
+    pub table: &'a str,
+    pub pk_column: &'a str,
+    pub pk_value: &'a str,
+    pub column: &'a str,
+}
+
 /// Update a specific cell using a connection source
 pub async fn update_cell_with_source(
     source: &ConnectionSource,
     database: &str,
-    schema: &str,
-    table: &str,
-    pk_column: &str,
-    pk_value: &str,
-    column: &str,
+    cell: Cell<'_>,
     new_value: Option<&str>,
 ) -> Result<()> {
+    let Cell {
+        schema,
+        table,
+        pk_column,
+        pk_value,
+        column,
+    } = cell;
     let (client, _handle) = connect(source, Some(database)).await?;
 
     // Use SQL literals for the new value to allow PostgreSQL type coercion
@@ -1579,18 +1591,11 @@ pub async fn update_cell_with_source(
 pub async fn update_cell(
     cluster: &str,
     database: &str,
-    schema: &str,
-    table: &str,
-    pk_column: &str,
-    pk_value: &str,
-    column: &str,
+    cell: Cell<'_>,
     new_value: Option<&str>,
 ) -> Result<()> {
     let source = ConnectionSource::from_cluster(cluster)?;
-    update_cell_with_source(
-        &source, database, schema, table, pk_column, pk_value, column, new_value,
-    )
-    .await
+    update_cell_with_source(&source, database, cell, new_value).await
 }
 
 /// Delete a row using a connection source
