@@ -451,6 +451,22 @@ fn users_are_created_listed_and_dropped() {
         .unwrap_or_else(|| panic!("appuser missing: {users}"));
     assert_eq!(appuser["superuser"], false);
 
+    // Built-in roles are hidden by prefix, and only pg_* counts: a role whose
+    // name merely starts with "pg" is an ordinary role.
+    ok(
+        home,
+        &["create-user", "pgapp", "--password", "pgapp-pw", "-c", c],
+    );
+    let users = json(home, &["users", "--cluster", c, "--json"]);
+    let names: Vec<&str> = users
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter_map(|u| u["name"].as_str())
+        .collect();
+    assert!(names.contains(&"pgapp"), "{users}");
+    assert!(!names.iter().any(|n| n.starts_with("pg_")), "{users}");
+
     // The hidden legacy path older automation uses to delete a user.
     let dropped = ok(
         home,

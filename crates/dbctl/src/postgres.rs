@@ -704,7 +704,9 @@ pub async fn list_users_with_source(source: &ConnectionSource) -> Result<Vec<Use
 
     let rows = client
         .query(
-            "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY rolname",
+            // Built-in roles are named pg_*. Not `NOT LIKE 'pg_%'`: in LIKE,
+            // `_` matches any character, which hid every role starting "pg".
+            "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE NOT starts_with(rolname, 'pg_') ORDER BY rolname",
             &[],
         )
         .await?;
@@ -1002,7 +1004,7 @@ pub async fn get_cluster_stats_with_source(source: &ConnectionSource) -> Result<
 
     let user_count_row = client
         .query_one(
-            "SELECT count(*) FROM pg_roles WHERE rolname NOT LIKE 'pg_%'",
+            "SELECT count(*) FROM pg_roles WHERE NOT starts_with(rolname, 'pg_')",
             &[],
         )
         .await?;
@@ -1161,8 +1163,8 @@ pub async fn list_schemas_with_source(
             "SELECT schema_name, COALESCE(schema_owner, '') as schema_owner
              FROM information_schema.schemata
              WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-               AND schema_name NOT LIKE 'pg_temp_%'
-               AND schema_name NOT LIKE 'pg_toast_temp_%'
+               AND NOT starts_with(schema_name, 'pg_temp_')
+               AND NOT starts_with(schema_name, 'pg_toast_temp_')
              ORDER BY schema_name",
             &[],
         )
