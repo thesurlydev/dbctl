@@ -3,8 +3,21 @@ description = "Build the project in debug mode"
 run = "cargo build"
 
 [tasks.test]
-description = "Run all tests"
-run = "cargo test -- --test-threads=1"
+description = "Run the fast tests (no PostgreSQL needed)"
+run = "cargo test"
+
+[tasks.test-integration]
+description = "Run the CLI tests that install PostgreSQL and build pgvector (slow)"
+run = "cargo test --test cli -- --ignored"
+
+[tasks.check]
+description = "Build, test, lint (warnings are errors), and check formatting"
+run = [
+  "cargo build",
+  "cargo test",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo fmt --all --check",
+]
 
 [tasks.install]
 description = "Install dbctl to ~/.cargo/bin"

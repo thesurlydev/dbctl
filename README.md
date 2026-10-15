@@ -63,6 +63,18 @@ dbctl users --cluster <c> --json      # [{"name","superuser","create_db","create
 starting one. callers parse this output, and the tests pin it in
 tests, so treat it as an interface.
 
+## Development
+
+```bash
+mise run check              # build, test, clippy -D warnings, fmt --check
+mise run test-integration   # CLI tests that install PostgreSQL (slow)
+```
+
+`crates/dbctl/tests/cli.rs` runs the real binary with HOME pointed at a
+scratch directory and stdin closed, so it never touches your `~/.dbctl` and
+catches anything that would wait on a prompt. The PostgreSQL tests reuse your
+`~/.dbctl/cache/postgres` archives (read-only) when present.
+
 ## Directory Structure
 
 All data is stored in `~/.dbctl/`:
