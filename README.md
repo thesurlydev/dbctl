@@ -42,6 +42,42 @@ dbctl createdb myapp      # Create a database
 dbctl use myapp           # Start interactive SQL REPL
 ```
 
+### Authentication
+
+`dbctl init` takes `--auth trust` (the default) or `--auth password`:
+
+- **trust**: every local connection is trusted, socket and TCP. Convenient on
+  a laptop, where nothing untrusted runs.
+- **password**: TCP logins need a scram-sha-256 password, and the unix socket
+  is owner-only (0700), so only the OS user running PostgreSQL can bypass
+  passwords. What servers use: create the superuser without a password, give
+  each application its own role and database, and connect applications over
+  TCP with that role's password.
+
+```bash
+dbctl init main --version 16 --port 5432 --username postgres --auth password
+dbctl create-user app --password "$APP_PASSWORD" -c main
+dbctl create-db app --owner app -c main
+```
+
+dbctl itself always connects through the cluster's unix socket, so it works
+under either mode without a password.
+
+### Running under systemd
+
+`dbctl run <cluster>` runs PostgreSQL in the foreground, replacing the dbctl
+process, so a service manager supervises the database directly. Stop it with
+SIGINT (PostgreSQL's fast shutdown):
+
+```ini
+[Service]
+User=postgres
+ExecStart=/usr/local/bin/dbctl run main
+KillSignal=SIGINT
+KillMode=mixed
+Restart=always
+```
+
 ### Scripting
 
 Without a terminal (CI, scripts, automation), `dbctl init` never

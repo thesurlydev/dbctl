@@ -52,6 +52,17 @@ enum Commands {
         /// Superuser name
         #[arg(long)]
         username: Option<String>,
+
+        /// How TCP logins are checked: trust (laptop default) or password
+        /// (scram-sha-256 over TCP, owner-only socket; what servers use)
+        #[arg(long, value_enum, default_value_t)]
+        auth: server::AuthMode,
+    },
+
+    /// Run a cluster in the foreground, for a service manager such as systemd
+    Run {
+        /// Cluster name
+        name: String,
     },
 
     /// Start a cluster
@@ -126,6 +137,10 @@ enum Commands {
     CreateDb {
         /// Database name
         name: String,
+
+        /// Role that will own the database (and so may create tables in it)
+        #[arg(long)]
+        owner: Option<String>,
 
         /// Cluster name (optional - auto-selected)
         #[arg(long, short = 'c')]
@@ -301,8 +316,12 @@ async fn main() -> Result<()> {
             version,
             port,
             username,
+            auth,
         }) => {
-            handle_init(name, version, port, username).await?;
+            handle_init(name, version, port, username, auth).await?;
+        }
+        Some(Commands::Run { name }) => {
+            server::run_cluster(&name)?;
         }
         Some(Commands::Start { name }) => {
             let cluster = resolve_cluster(name)?;
@@ -363,14 +382,14 @@ async fn main() -> Result<()> {
             })
             .await?;
         }
-        Some(Commands::CreateDb { name, cluster }) => {
+        Some(Commands::CreateDb {
+            name,
+            owner,
+            cluster,
+        }) => {
             let cluster = resolve_cluster(cluster)?;
             server::ensure_cluster_running(&cluster)?;
-            postgres::handle_action(postgres::DbAction::Create {
-                cluster: cluster.clone(),
-                database: name,
-            })
-            .await?;
+            postgres::create_database(&cluster, &name, owner.as_deref()).await?;
             save_context(&cluster)?;
         }
         Some(Commands::DropDb {
@@ -712,6 +731,7 @@ async fn handle_init(
     version: Option<String>,
     port: Option<u16>,
     username: Option<String>,
+    auth: server::AuthMode,
 ) -> Result<()> {
     use dialoguer::{Confirm, Input};
     use std::io::IsTerminal;
@@ -788,6 +808,7 @@ async fn handle_init(
         name: name.clone(),
         port,
         username,
+        auth,
     })
     .await?;
 

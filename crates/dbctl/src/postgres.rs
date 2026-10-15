@@ -215,7 +215,7 @@ pub enum UserAction {
 pub async fn handle_action(action: DbAction) -> Result<()> {
     match action {
         DbAction::Create { cluster, database } => {
-            create_database(&cluster, &database).await?;
+            create_database(&cluster, &database, None).await?;
         }
         DbAction::Drop { cluster, database } => {
             drop_database(&cluster, &database).await?;
@@ -302,6 +302,7 @@ pub async fn handle_action(action: DbAction) -> Result<()> {
 pub async fn create_database_with_source(
     source: &ConnectionSource,
     database: &str,
+    owner: Option<&str>,
 ) -> Result<bool> {
     let (client, _handle) = connect(source, Some("postgres")).await?;
 
@@ -315,15 +316,18 @@ pub async fn create_database_with_source(
     }
 
     // Create database
-    let query = format!("CREATE DATABASE {}", quote_ident(database));
+    let mut query = format!("CREATE DATABASE {}", quote_ident(database));
+    if let Some(owner) = owner {
+        query.push_str(&format!(" OWNER {}", quote_ident(owner)));
+    }
     client.batch_execute(&query).await?;
 
     Ok(true) // Created successfully
 }
 
-pub async fn create_database(cluster: &str, database: &str) -> Result<()> {
+pub async fn create_database(cluster: &str, database: &str, owner: Option<&str>) -> Result<()> {
     let source = ConnectionSource::from_cluster(cluster)?;
-    let created = create_database_with_source(&source, database).await?;
+    let created = create_database_with_source(&source, database, owner).await?;
 
     if created {
         println!("✓ Created database '{}' in cluster '{}'", database, cluster);
@@ -411,12 +415,7 @@ fn shell(cluster: &str, database: Option<&str>) -> Result<()> {
     }
 
     let status = Command::new(&psql_path)
-        .arg("-h")
-        .arg("localhost")
-        .arg("-p")
-        .arg(metadata.port.to_string())
-        .arg("-U")
-        .arg(&metadata.username)
+        .args(metadata.client_args())
         .arg("-d")
         .arg(dbname)
         .status()?;
@@ -438,12 +437,7 @@ pub fn exec_sql(cluster: &str, database: &str, sql: &str) -> Result<String> {
     }
 
     let output = Command::new(&psql_path)
-        .arg("-h")
-        .arg("localhost")
-        .arg("-p")
-        .arg(metadata.port.to_string())
-        .arg("-U")
-        .arg(&metadata.username)
+        .args(metadata.client_args())
         .arg("-d")
         .arg(database)
         .arg("-c")
@@ -468,14 +462,7 @@ fn exec(cluster: &str, database: &str, file: Option<&str>, sql: Option<&str>) ->
     }
 
     let mut cmd = Command::new(&psql_path);
-    cmd.arg("-h")
-        .arg("localhost")
-        .arg("-p")
-        .arg(metadata.port.to_string())
-        .arg("-U")
-        .arg(&metadata.username)
-        .arg("-d")
-        .arg(database);
+    cmd.args(metadata.client_args()).arg("-d").arg(database);
 
     if let Some(file_path) = file {
         if !Path::new(file_path).exists() {
@@ -516,12 +503,7 @@ pub fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
     println!("Backing up database '{}' to '{}'...", database, output);
 
     let status = Command::new(&pg_dump_path)
-        .arg("-h")
-        .arg("localhost")
-        .arg("-p")
-        .arg(metadata.port.to_string())
-        .arg("-U")
-        .arg(&metadata.username)
+        .args(metadata.client_args())
         .arg("-d")
         .arg(database)
         .arg("-f")
@@ -556,12 +538,7 @@ pub fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
     let sql_content = fs::read_to_string(input)?;
 
     let mut child = Command::new(&psql_path)
-        .arg("-h")
-        .arg("localhost")
-        .arg("-p")
-        .arg(metadata.port.to_string())
-        .arg("-U")
-        .arg(&metadata.username)
+        .args(metadata.client_args())
         .arg("-d")
         .arg(database)
         .stdin(std::process::Stdio::piped())
@@ -590,10 +567,7 @@ pub fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
 async fn info(cluster: &str, database: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
+    let conn_str = metadata.connection_string(database);
 
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
 
@@ -658,10 +632,7 @@ pub async fn create_user(
 ) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
+    let conn_str = metadata.connection_string("postgres");
 
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
 
@@ -753,10 +724,7 @@ async fn print_users(cluster: &str) -> Result<()> {
 async fn drop_user(cluster: &str, username: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname=postgres",
-        metadata.port, metadata.username
-    );
+    let conn_str = metadata.connection_string("postgres");
 
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
 
@@ -785,10 +753,7 @@ async fn grant_privileges(
 ) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
+    let conn_str = metadata.connection_string(database);
 
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
 
@@ -852,10 +817,7 @@ async fn revoke_privileges(
 ) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
+    let conn_str = metadata.connection_string(database);
 
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
 
@@ -1059,10 +1021,7 @@ pub async fn get_cluster_stats(cluster: &str) -> Result<ClusterStats> {
 async fn show_privileges(cluster: &str, database: &str, user: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let conn_str = format!(
-        "host=localhost port={} user={} dbname={}",
-        metadata.port, metadata.username, database
-    );
+    let conn_str = metadata.connection_string(database);
 
     let (client, connection) = tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
 

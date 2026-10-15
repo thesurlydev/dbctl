@@ -51,6 +51,10 @@ pub enum ServerAction {
         /// Superuser name
         #[arg(long, default_value = "postgres")]
         username: String,
+
+        /// How TCP logins are checked
+        #[arg(long, value_enum, default_value_t)]
+        auth: AuthMode,
     },
 
     /// Start a database cluster
@@ -134,8 +138,9 @@ pub async fn handle_action(action: ServerAction) -> Result<()> {
             name,
             port,
             username,
+            auth,
         } => {
-            init_cluster(&version, &name, port, &username)?;
+            init_cluster(&version, &name, port, &username, auth)?;
         }
         ServerAction::Start { name } => {
             start_cluster(&name)?;
@@ -498,7 +503,13 @@ fn list_installed() -> Result<()> {
     Ok(())
 }
 
-pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Result<()> {
+pub fn init_cluster(
+    version: &str,
+    name: &str,
+    port: u16,
+    username: &str,
+    auth: AuthMode,
+) -> Result<()> {
     let version_dir = get_version_dir(version);
 
     if !version_dir.exists() {
@@ -551,32 +562,28 @@ pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Res
         username: username.to_string(),
         data_dir: data_dir.clone(),
         logs_dir: logs_dir.clone(),
+        auth,
     };
 
     let metadata_path = cluster_dir.join("metadata.json");
     let metadata_json = serde_json::to_string_pretty(&metadata)?;
     fs::write(metadata_path, metadata_json)?;
 
-    // Update postgresql.conf with the port
     let conf_path = data_dir.join("postgresql.conf");
     let mut conf_content = fs::read_to_string(&conf_path)?;
-    conf_content.push_str(&format!("\nport = {}\n", port));
-    conf_content.push_str(&format!(
-        "unix_socket_directories = '{}'\n",
-        socket_dir_for(&cluster_dir, port).display()
+    conf_content.push_str(&conf_additions(
+        port,
+        &socket_dir_for(&cluster_dir, port),
+        auth,
     ));
     fs::write(conf_path, conf_content)?;
 
-    // Update pg_hba.conf for local connections
-    let hba_path = data_dir.join("pg_hba.conf");
-    let mut hba_content = fs::read_to_string(&hba_path)?;
-    hba_content.push_str("\n# Allow local connections without password\n");
-    hba_content.push_str("local   all             all                                     trust\n");
-    hba_content.push_str("host    all             all             127.0.0.1/32            trust\n");
-    hba_content.push_str("host    all             all             ::1/128                 trust\n");
-    fs::write(hba_path, hba_content)?;
+    // Replaced, not appended to: pg_hba.conf is first-match, and the lines
+    // initdb writes trust every local and loopback connection, so anything
+    // appended after them would never be consulted.
+    fs::write(data_dir.join("pg_hba.conf"), pg_hba_conf(auth))?;
 
-    println!("✓ Cluster '{}' initialized", name);
+    println!("✓ Cluster '{}' initialized ({} auth)", name, auth.name());
     println!("\nConnection details:");
     println!("  Port: {}", port);
     println!("  User: {}", username);
@@ -584,6 +591,87 @@ pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Res
     println!("  dbctl start {}", name);
 
     Ok(())
+}
+
+/// How a cluster checks logins over TCP. The unix socket always trusts its
+/// callers; dbctl administers clusters through it, so it never needs a
+/// superuser password.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    clap::ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    /// Every local connection is trusted, socket and TCP alike: convenient on
+    /// a laptop, where nothing untrusted runs.
+    #[default]
+    Trust,
+    /// TCP logins need a scram-sha-256 password, and the socket is owner-only
+    /// (0700), so only the OS user running PostgreSQL can bypass passwords.
+    /// What servers use.
+    Password,
+}
+
+impl AuthMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            AuthMode::Trust => "trust",
+            AuthMode::Password => "password",
+        }
+    }
+}
+
+/// The whole pg_hba.conf for a new cluster. First match wins.
+pub fn pg_hba_conf(auth: AuthMode) -> String {
+    let tcp = match auth {
+        AuthMode::Trust => "trust",
+        AuthMode::Password => "scram-sha-256",
+    };
+    format!(
+        "# Written by dbctl ({} auth). First match wins.\n\
+         # TYPE  DATABASE  USER  ADDRESS        METHOD\n\
+         local   all       all                  trust\n\
+         host    all       all   127.0.0.1/32   {tcp}\n\
+         host    all       all   ::1/128        {tcp}\n",
+        auth.name()
+    )
+}
+
+/// Settings appended to the postgresql.conf initdb writes.
+pub fn conf_additions(port: u16, socket_dir: &std::path::Path, auth: AuthMode) -> String {
+    let mut conf = format!(
+        "\n# dbctl\nport = {}\nunix_socket_directories = '{}'\n",
+        port,
+        socket_dir.display()
+    );
+    if auth == AuthMode::Password {
+        conf.push_str("unix_socket_permissions = 0700\npassword_encryption = 'scram-sha-256'\n");
+    }
+    conf
+}
+
+/// How to connect, as printed after a start or restart.
+fn print_connection_hint(name: &str, metadata: &ClusterMetadata) {
+    match metadata.auth {
+        AuthMode::Trust => {
+            println!("\nConnection string:");
+            println!(
+                "  postgresql://{}@localhost:{}/postgres",
+                metadata.username, metadata.port
+            );
+        }
+        AuthMode::Password => {
+            println!("\nTCP logins need a password. As the superuser, over the socket:");
+            println!("  dbctl use <database> --cluster {}", name);
+        }
+    }
 }
 
 /// Longest unix socket path the platform accepts (`sun_path` less its NUL).
@@ -614,6 +702,48 @@ pub struct ClusterMetadata {
     pub username: String,
     pub data_dir: PathBuf,
     pub logs_dir: PathBuf,
+    /// Absent in clusters created before auth modes existed, which trust.
+    #[serde(default)]
+    pub auth: AuthMode,
+}
+
+impl ClusterMetadata {
+    /// The directory holding the cluster's unix socket. dbctl reaches its own
+    /// clusters through it: it works under both auth modes and needs no
+    /// password.
+    pub fn socket_dir(&self) -> PathBuf {
+        let cluster_dir = self.data_dir.parent().unwrap_or(&self.data_dir);
+        socket_dir_for(cluster_dir, self.port)
+    }
+
+    /// A tokio-postgres connection string for `database`, over the socket.
+    pub fn connection_string(&self, database: &str) -> String {
+        format!(
+            "host={} port={} user={} dbname={}",
+            conn_value(&self.socket_dir().to_string_lossy()),
+            self.port,
+            conn_value(&self.username),
+            conn_value(database)
+        )
+    }
+
+    /// Connection arguments for libpq tools (psql, pg_dump), over the socket.
+    pub fn client_args(&self) -> Vec<String> {
+        vec![
+            "-h".to_string(),
+            self.socket_dir().to_string_lossy().into_owned(),
+            "-p".to_string(),
+            self.port.to_string(),
+            "-U".to_string(),
+            self.username.clone(),
+        ]
+    }
+}
+
+/// A value for a libpq key=value connection string, quoted so spaces,
+/// quotes, and backslashes survive.
+fn conn_value(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 pub fn load_cluster_metadata(name: &str) -> Result<ClusterMetadata> {
@@ -709,6 +839,7 @@ pub struct ClusterSummary {
     pub username: String,
     /// `running` or `stopped`.
     pub status: &'static str,
+    pub auth: AuthMode,
 }
 
 pub fn cluster_summary(name: &str) -> Result<ClusterSummary> {
@@ -744,6 +875,7 @@ fn summarize(name: String, metadata: ClusterMetadata) -> ClusterSummary {
         port: metadata.port,
         username: metadata.username,
         status,
+        auth: metadata.auth,
     }
 }
 
@@ -788,13 +920,49 @@ pub fn start_cluster(name: &str) -> Result<()> {
     }
 
     println!("✓ Cluster '{}' started", name);
-    println!("\nConnection string:");
-    println!(
-        "  postgresql://{}@localhost:{}/postgres",
-        metadata.username, metadata.port
-    );
+    print_connection_hint(name, &metadata);
 
     Ok(())
+}
+
+/// Run the cluster's postgres in the foreground, replacing this process.
+///
+/// For a supervisor: systemd's `pg-<cluster>.service` runs `dbctl run
+/// <cluster>` as the `postgres` user, so systemd manages PostgreSQL itself.
+/// Its signals reach postgres directly, postgres exiting is the unit
+/// exiting, and the database lives outside whatever process started it.
+/// Output goes to the cluster's log file, as with `dbctl start`, so
+/// `dbctl logs` works either way.
+#[cfg(unix)]
+pub fn run_cluster(name: &str) -> Result<()> {
+    use anyhow::Context as _;
+    use std::os::unix::process::CommandExt;
+
+    let metadata = load_cluster_metadata(name)?;
+    if is_cluster_running(name)? {
+        bail!(
+            "Cluster '{}' is already running (started outside this supervisor); stop it first",
+            name
+        );
+    }
+    let postgres = get_version_dir(&metadata.version)
+        .join("bin")
+        .join("postgres");
+    fs::create_dir_all(&metadata.logs_dir)?;
+    let log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(metadata.logs_dir.join("postgresql.log"))
+        .context("Failed to open the cluster log")?;
+
+    // exec only returns on failure.
+    let error = Command::new(&postgres)
+        .arg("-D")
+        .arg(&metadata.data_dir)
+        .stdout(log.try_clone()?)
+        .stderr(log)
+        .exec();
+    Err(error).with_context(|| format!("Failed to run {}", postgres.display()))
 }
 
 pub fn stop_cluster(name: &str) -> Result<()> {
@@ -852,11 +1020,7 @@ pub fn restart_cluster(name: &str) -> Result<()> {
     }
 
     println!("✓ Cluster '{}' restarted", name);
-    println!("\nConnection string:");
-    println!(
-        "  postgresql://{}@localhost:{}/postgres",
-        metadata.username, metadata.port
-    );
+    print_connection_hint(name, &metadata);
 
     Ok(())
 }
@@ -1208,12 +1372,81 @@ mod tests {
             name: "main".to_string(),
             version: "16.3".to_string(),
             port: 5432,
-            username: "app".to_string(),
+            username: "postgres".to_string(),
             status: "running",
+            auth: AuthMode::Password,
         };
         assert_eq!(
             serde_json::to_string(&vec![summary]).unwrap(),
-            r#"[{"name":"main","version":"16.3","port":5432,"username":"app","status":"running"}]"#
+            r#"[{"name":"main","version":"16.3","port":5432,"username":"postgres","status":"running","auth":"password"}]"#
+        );
+    }
+
+    #[test]
+    fn password_mode_hba_checks_tcp_and_trusts_only_the_socket() {
+        let hba = pg_hba_conf(AuthMode::Password);
+        let rules: Vec<Vec<&str>> = hba
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+            .map(|l| l.split_whitespace().collect())
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                vec!["local", "all", "all", "trust"],
+                vec!["host", "all", "all", "127.0.0.1/32", "scram-sha-256"],
+                vec!["host", "all", "all", "::1/128", "scram-sha-256"],
+            ]
+        );
+        assert!(!pg_hba_conf(AuthMode::Trust).contains("scram"));
+    }
+
+    #[test]
+    fn password_mode_locks_the_socket_to_its_owner() {
+        let socket = std::path::Path::new("/data/db/.dbctl/clusters/main");
+        let conf = conf_additions(5432, socket, AuthMode::Password);
+        assert!(conf.contains("port = 5432"));
+        assert!(conf.contains("unix_socket_directories = '/data/db/.dbctl/clusters/main'"));
+        assert!(conf.contains("unix_socket_permissions = 0700"));
+        assert!(conf.contains("password_encryption = 'scram-sha-256'"));
+        assert!(!conf_additions(5432, socket, AuthMode::Trust).contains("unix_socket_permissions"));
+    }
+
+    #[test]
+    fn metadata_from_before_auth_modes_reads_as_trust() {
+        let old = r#"{"version":"16.3","port":5432,"username":"app","data_dir":"/d/data","logs_dir":"/d/logs"}"#;
+        let metadata: ClusterMetadata = serde_json::from_str(old).unwrap();
+        assert_eq!(metadata.auth, AuthMode::Trust);
+    }
+
+    #[test]
+    fn admin_connections_go_over_the_socket() {
+        let metadata = ClusterMetadata {
+            version: "16.3".to_string(),
+            port: 5432,
+            username: "postgres".to_string(),
+            data_dir: PathBuf::from("/home/o'neil/.dbctl/clusters/main/data"),
+            logs_dir: PathBuf::from("/home/o'neil/.dbctl/clusters/main/logs"),
+            auth: AuthMode::Password,
+        };
+        assert_eq!(
+            metadata.socket_dir(),
+            PathBuf::from("/home/o'neil/.dbctl/clusters/main")
+        );
+        assert_eq!(
+            metadata.connection_string("app"),
+            r"host='/home/o\'neil/.dbctl/clusters/main' port=5432 user='postgres' dbname='app'"
+        );
+        assert_eq!(
+            metadata.client_args(),
+            [
+                "-h",
+                "/home/o'neil/.dbctl/clusters/main",
+                "-p",
+                "5432",
+                "-U",
+                "postgres"
+            ]
         );
     }
 

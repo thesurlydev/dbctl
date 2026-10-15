@@ -504,3 +504,132 @@ fn extension_install_enable_list_uninstall() {
         &["extension", "uninstall", "pgvector", "--cluster", c],
     );
 }
+
+/// psql from the shared install, for connecting the way an application does.
+fn psql(url: &str, sql: &str) -> Output {
+    Command::new(pg_home().join(format!(".dbctl/versions/{PG_VERSION}/bin/psql")))
+        .args([url, "-Atc", sql])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run psql")
+}
+
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn password_mode_checks_tcp_logins_and_admin_uses_the_socket() {
+    let home = pg_home();
+    let name = "it_password";
+    let _ = dbctl(home, &["remove", name, "--force"]);
+    ok(
+        home,
+        &[
+            "init",
+            name,
+            "--version",
+            PG_VERSION,
+            "--port",
+            "25511",
+            "--username",
+            "postgres",
+            "--auth",
+            "password",
+        ],
+    );
+    let cluster = Cluster {
+        name: name.to_string(),
+        port: 25511,
+    };
+    assert_eq!(cluster.status()["auth"], "password");
+    ok(home, &["start", name]);
+
+    // Admin work goes over the socket and needs no password.
+    let created = ok(
+        home,
+        &["create-user", "app", "--password", "app's-pw", "-c", name],
+    );
+    assert!(created.contains("Created user"), "{created}");
+    ok(home, &["create-db", "appdb", "--owner", "app", "-c", name]);
+    let owner = cluster.sql(
+        "postgres",
+        "select pg_get_userbyid(datdba) from pg_database where datname = 'appdb'",
+    );
+    assert!(owner.contains("app"), "{owner}");
+
+    // The app logs in over TCP with its password, and owns its database.
+    let url = |user: &str, pw: &str| format!("postgresql://{user}:{pw}@127.0.0.1:25511/appdb");
+    let app = psql(
+        &url("app", "app%27s-pw"),
+        "create table t (v int); select current_user || '@' || current_database()",
+    );
+    assert!(
+        app.status.success(),
+        "app login failed: {}",
+        String::from_utf8_lossy(&app.stderr)
+    );
+    let out = String::from_utf8_lossy(&app.stdout);
+    assert_eq!(out.lines().last(), Some("app@appdb"), "{out}");
+
+    let wrong = psql(&url("app", "nope"), "select 1");
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("password authentication failed"));
+
+    // The superuser has no password, so it cannot log in over TCP at all.
+    let superuser = psql("postgresql://postgres@127.0.0.1:25511/postgres", "select 1");
+    assert!(!superuser.status.success(), "superuser reached over TCP");
+
+    // Only the owner may use the socket.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let candidates = [
+            home.join(format!(".dbctl/clusters/{name}/.s.PGSQL.25511")),
+            PathBuf::from("/tmp/.s.PGSQL.25511"),
+        ];
+        let socket = candidates.iter().find(|p| p.exists()).expect("socket file");
+        let mode = std::fs::metadata(socket)
+            .expect("stat socket")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{}", socket.display());
+    }
+}
+
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn run_keeps_postgres_in_the_foreground_until_signalled() {
+    let home = pg_home();
+    let cluster = Cluster::init("it_run", 25512);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_dbctl"))
+        .args(["run", &cluster.name])
+        .env("HOME", home)
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("spawn dbctl run");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while cluster.status()["status"] != "running" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "postgres never came up"
+        );
+        assert!(
+            child.try_wait().expect("poll").is_none(),
+            "dbctl run exited early"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // A second supervisor must not start another postmaster on the same data.
+    assert!(fails(home, &["run", &cluster.name]).contains("already running"));
+
+    // SIGINT is PostgreSQL's fast shutdown, what the systemd unit sends.
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(killed.success());
+    let status = child.wait().expect("wait for dbctl run");
+    assert!(status.success(), "postgres exited with {status}");
+    assert_eq!(cluster.status()["status"], "stopped");
+}

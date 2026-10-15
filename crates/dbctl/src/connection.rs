@@ -146,11 +146,7 @@ impl ConnectionSource {
     pub fn connection_string(&self, database: Option<&str>) -> String {
         match self {
             ConnectionSource::Cluster { metadata, .. } => {
-                let db = database.unwrap_or("postgres");
-                format!(
-                    "host=localhost port={} user={} dbname={}",
-                    metadata.port, metadata.username, db
-                )
+                metadata.connection_string(database.unwrap_or("postgres"))
             }
             ConnectionSource::Remote(profile) => profile.connection_string(database),
         }
@@ -182,11 +178,14 @@ impl ConnectionSource {
         }
     }
 
-    /// Get host
-    pub fn host(&self) -> &str {
+    /// Where connections go: a local cluster's socket directory, or a remote
+    /// profile's host.
+    pub fn host(&self) -> String {
         match self {
-            ConnectionSource::Cluster { .. } => "localhost",
-            ConnectionSource::Remote(profile) => &profile.host,
+            ConnectionSource::Cluster { metadata, .. } => {
+                metadata.socket_dir().to_string_lossy().into_owned()
+            }
+            ConnectionSource::Remote(profile) => profile.host.clone(),
         }
     }
 
