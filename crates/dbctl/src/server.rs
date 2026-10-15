@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 
@@ -236,7 +236,7 @@ pub async fn install_postgres(version: &str) -> Result<()> {
 
     match os.as_str() {
         "macos" => install_postgres_macos(version, &version_dir, &arch).await?,
-        "linux" => install_postgres_linux(version, &version_dir, &arch).await?,
+        "linux" => install_postgres_linux(version, &version_dir)?,
         _ => bail!("Unsupported platform: {}", os),
     }
 
@@ -366,48 +366,44 @@ async fn install_postgres_macos(version: &str, install_dir: &PathBuf, _arch: &st
     Ok(())
 }
 
-async fn install_postgres_linux(version: &str, install_dir: &PathBuf, arch: &str) -> Result<()> {
-    let arch_str = if arch == "arm64" { "arm64" } else { "x64" };
+/// Debian and Ubuntu packages from apt.postgresql.org install each major
+/// version under here, e.g. /usr/lib/postgresql/16/bin/postgres.
+const SYSTEM_POSTGRES_ROOT: &str = "/usr/lib/postgresql";
 
-    // Normalize version (e.g., "17" -> "17.7") to latest minor version for URL compatibility
-    let normalized_version = normalize_version(version);
+/// On Linux dbctl uses the system's PostgreSQL rather than downloading it:
+/// EnterpriseDB publishes no Linux binaries past PostgreSQL 10, and the
+/// distribution's packages (apt.postgresql.org on Debian/Ubuntu) carry
+/// security updates. `install` links ~/.dbctl/versions/<version> to the
+/// package's directory, so everything else in dbctl is unchanged.
+fn install_postgres_linux(version: &str, install_dir: &Path) -> Result<()> {
+    link_system_postgres(version, install_dir, Path::new(SYSTEM_POSTGRES_ROOT))
+}
 
-    fs::create_dir_all(install_dir)?;
-
-    // Check cache first - Linux binaries are cached per-architecture
-    let os = "linux";
-    if crate::cache::is_cached(&normalized_version, os, arch_str)? {
-        println!("✓ Found in cache, extracting...");
-        let cache_path = crate::cache::get_cache_path(&normalized_version, os, arch_str)?;
-        extract_targz_from_file(&cache_path, install_dir)?;
-    } else {
-        let url = format!(
-            "https://get.enterprisedb.com/postgresql/postgresql-{}-1-linux-{}-binaries.tar.gz",
-            normalized_version, arch_str
+fn link_system_postgres(version: &str, install_dir: &Path, system_root: &Path) -> Result<()> {
+    let major = version.split('.').next().unwrap_or(version);
+    let system_dir = system_root.join(major);
+    if !system_dir.join("bin").join("postgres").exists() {
+        bail!(
+            "PostgreSQL {major} is not installed on this system. On Linux dbctl uses the \
+             distribution's packages (EnterpriseDB publishes no Linux binaries for current \
+             versions). On Debian or Ubuntu, add apt.postgresql.org and run: \
+             apt-get install postgresql-{major}"
         );
-        println!("Downloading from: {}", url);
-
-        let data = download_binary(&url).await?;
-        println!("✓ Saving to cache...");
-        let cache_path = crate::cache::save_to_cache(&normalized_version, os, arch_str, &data)?;
-
-        extract_targz_from_file(&cache_path, install_dir)?;
     }
-
-    // The extracted structure is pgsql/
-    let pgsql_dir = install_dir.join("pgsql");
-    if pgsql_dir.exists() {
-        // Move contents up
-        for entry in fs::read_dir(&pgsql_dir)? {
-            let entry = entry?;
-            let dest = install_dir.join(entry.file_name());
-            fs::rename(entry.path(), dest)?;
-        }
-        fs::remove_dir_all(&pgsql_dir)?;
+    if let Some(parent) = install_dir.parent() {
+        fs::create_dir_all(parent)?;
     }
-
-    println!("✓ Installation complete");
-
+    // A link left dangling by an uninstalled package is replaced.
+    if fs::symlink_metadata(install_dir).is_ok() {
+        fs::remove_file(install_dir)?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&system_dir, install_dir)?;
+    println!(
+        "✓ Using the system's PostgreSQL {} at {}",
+        major,
+        system_dir.display()
+    );
     Ok(())
 }
 
@@ -438,19 +434,6 @@ async fn download_binary(url: &str) -> Result<Vec<u8>> {
     pb.finish_with_message("Download complete");
 
     Ok(buffer)
-}
-
-fn extract_targz_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
-    println!("Extracting...");
-
-    let file = fs::File::open(file_path)?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
-    archive.unpack(dest_dir)?;
-
-    println!("✓ Extraction complete");
-
-    Ok(())
 }
 
 fn extract_zip_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
@@ -1351,6 +1334,37 @@ fn get_directory_size_bytes(path: &PathBuf) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_install_links_the_system_postgres() {
+        let dir = std::env::temp_dir().join(format!("dbctl-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let system = dir.join("usr/lib/postgresql");
+        let versions = dir.join("home/.dbctl/versions");
+
+        // Not installed: a clear instruction, nothing created.
+        let err = link_system_postgres("16", &versions.join("16"), &system).unwrap_err();
+        assert!(
+            err.to_string().contains("apt-get install postgresql-16"),
+            "{err}"
+        );
+        assert!(fs::symlink_metadata(versions.join("16")).is_err());
+
+        fs::create_dir_all(system.join("16/bin")).unwrap();
+        fs::write(system.join("16/bin/postgres"), "").unwrap();
+        link_system_postgres("16", &versions.join("16"), &system).unwrap();
+        assert_eq!(
+            fs::read_link(versions.join("16")).unwrap(),
+            system.join("16")
+        );
+        assert!(versions.join("16/bin/postgres").exists());
+
+        // A minor version maps to its major's package, and relinking is fine.
+        link_system_postgres("16.3", &versions.join("16.3"), &system).unwrap();
+        link_system_postgres("16", &versions.join("16"), &system).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn socket_stays_in_the_cluster_dir_when_it_fits() {

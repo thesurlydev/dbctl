@@ -23,8 +23,6 @@ webpki-roots = "1"
 anyhow = "1"
 reqwest = { version = "0.13", features = ["stream"] }
 futures-util = "0.3"
-tar = "0.4"
-flate2 = "1.0"
 zip = "9"
 indicatif = "0.18.3"
 dirs = "7"

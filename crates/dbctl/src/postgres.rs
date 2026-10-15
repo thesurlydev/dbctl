@@ -520,6 +520,33 @@ pub fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
     Ok(())
 }
 
+/// Dump every database, role, and role password hash in the cluster with
+/// pg_dumpall, the input a restore needs to bring an application back with
+/// its login intact. Written to `<output>.tmp` and renamed, so a failed or
+/// interrupted dump never replaces the previous good one.
+pub fn dumpall(cluster: &str, output: &str) -> Result<()> {
+    let metadata = crate::server::load_cluster_metadata(cluster)?;
+    let pg_dumpall = crate::server::get_version_dir(&metadata.version).join("bin/pg_dumpall");
+    if !pg_dumpall.exists() {
+        bail!("pg_dumpall not found at {}", pg_dumpall.display());
+    }
+
+    let tmp = format!("{}.tmp", output);
+    let status = Command::new(&pg_dumpall)
+        .args(metadata.client_args())
+        .arg("--no-password")
+        .arg("-f")
+        .arg(&tmp)
+        .status()?;
+    if !status.success() {
+        let _ = fs::remove_file(&tmp);
+        bail!("pg_dumpall failed with status: {}", status);
+    }
+    fs::rename(&tmp, output)?;
+    println!("✓ Dumped cluster '{}' to {}", cluster, output);
+    Ok(())
+}
+
 pub fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 

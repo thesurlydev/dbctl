@@ -19,7 +19,10 @@ Designed for local development with smart defaults - minimal typing, auto-select
 - Interactive prompts for missing information
 - Colored output for better readability
 - No root access required - all data stored in `~/.dbctl/`
-- Supports macOS and Linux (x86_64 and ARM64)
+- Supports macOS and Linux (x86_64 and ARM64). On macOS dbctl downloads
+  PostgreSQL; on Linux it uses the distribution's packages
+  (`apt-get install postgresql-16` from apt.postgresql.org), since no Linux
+  binaries are published for current versions
 
 
 ## Installation
@@ -95,6 +98,13 @@ dbctl databases --cluster <c> --json  # ["app", "postgres"]
 dbctl users --cluster <c> --json      # [{"name","superuser","create_db","create_role"}]
 ```
 
+Secrets and backups:
+
+```bash
+printf '%s\n' "$PW" | dbctl create-user app --password-stdin -c main  # not in ps
+dbctl dumpall -c main -o /backups/main.sql   # every database and role, written atomically
+```
+
 `databases` and `users` with `--json` require a running cluster rather than
 starting one. callers parse this output, and the tests pin it in
 tests, so treat it as an interface.
@@ -148,6 +158,7 @@ dbctl cache clear
 
 - Rust 1.75 or later
 - macOS or Linux (x86_64 or ARM64)
-- Internet connection for downloading PostgreSQL binaries
+- macOS: an internet connection for downloading PostgreSQL binaries
+- Linux: PostgreSQL installed from your distribution's packages
 
 No external tools required for runtime - all archive extraction is handled natively in Rust.

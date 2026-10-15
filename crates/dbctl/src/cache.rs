@@ -5,18 +5,14 @@
 //!
 //! Cache locations:
 //! - Local dev: ~/.dbctl/cache/postgres/
-//! - VPS: /data/cache/postgres/
 //!
-//! Cache keys: {version}-{os}-{arch}.{ext}
+//! Only macOS downloads PostgreSQL, so in practice only macOS archives are
+//! cached. On Linux, `dbctl install` links the distribution's packages
+//! (apt.postgresql.org) instead: EnterpriseDB publishes no Linux binaries
+//! for current versions.
 //!
-//! Architecture handling:
-//! - macOS: Uses "universal" (binaries work on both Intel and Apple Silicon)
-//! - Linux: Uses "x64" (amd64) or "arm64" (aarch64) - architecture-specific
-//!
-//! Examples:
-//! - 17.7-macos-universal.zip (works on all macOS)
-//! - 17.7-linux-x64.tar.gz (amd64 only)
-//! - 17.7-linux-arm64.tar.gz (aarch64 only)
+//! Cache keys: {version}-{os}-{arch}.{ext}, e.g. 17.7-macos-universal.zip
+//! ("universal": the binaries run on both Intel and Apple Silicon).
 
 use anyhow::{Context, Result};
 use clap::Subcommand;

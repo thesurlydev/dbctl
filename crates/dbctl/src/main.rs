@@ -240,9 +240,25 @@ enum Commands {
         #[arg(long, short = 'p')]
         password: Option<String>,
 
+        /// Read the password from stdin (its first line), which keeps it out
+        /// of the process list
+        #[arg(long, conflicts_with = "password")]
+        password_stdin: bool,
+
         /// Create as superuser
         #[arg(long)]
         superuser: bool,
+
+        /// Cluster name (optional - auto-selected)
+        #[arg(long, short = 'c')]
+        cluster: Option<String>,
+    },
+
+    /// Dump every database and role in a cluster (pg_dumpall), for backups
+    Dumpall {
+        /// File to write; replaced atomically once the dump completes
+        #[arg(long, short = 'o')]
+        output: String,
 
         /// Cluster name (optional - auto-selected)
         #[arg(long, short = 'c')]
@@ -486,12 +502,15 @@ async fn main() -> Result<()> {
         Some(Commands::CreateUser {
             username,
             password,
+            password_stdin,
             superuser,
             cluster,
         }) => {
             let cluster = resolve_cluster(cluster)?;
             server::ensure_cluster_running(&cluster)?;
-            let password = if let Some(pwd) = password {
+            let password = if password_stdin {
+                Some(read_password_from_stdin()?)
+            } else if let Some(pwd) = password {
                 Some(pwd)
             } else {
                 prompt_password(&username)?
@@ -525,6 +544,13 @@ async fn main() -> Result<()> {
                 action: postgres::UserAction::List { cluster },
             })
             .await?;
+        }
+        Some(Commands::Dumpall { output, cluster }) => {
+            let cluster = resolve_cluster(cluster)?;
+            // A backup reports on the cluster as it is; starting it here would
+            // fight whatever supervises it (systemd on a server).
+            require_running(&cluster)?;
+            postgres::dumpall(&cluster, &output)?;
         }
         Some(Commands::Extension { action }) => {
             extension::handle_action(action)?;
@@ -675,6 +701,17 @@ async fn show_overview() -> Result<()> {
     println!("  psql -h localhost -p <port> -U <username> -d <database>");
 
     Ok(())
+}
+
+/// The first line of stdin, without its line ending.
+fn read_password_from_stdin() -> Result<String> {
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let password = line.trim_end_matches(['\n', '\r']).to_string();
+    if password.is_empty() {
+        bail!("--password-stdin read an empty password");
+    }
+    Ok(password)
 }
 
 /// Write `value` to stdout as one line of JSON. JSON output is a contract

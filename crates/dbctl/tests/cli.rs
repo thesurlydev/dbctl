@@ -633,3 +633,109 @@ fn run_keeps_postgres_in_the_foreground_until_signalled() {
     assert!(status.success(), "postgres exited with {status}");
     assert_eq!(cluster.status()["status"], "stopped");
 }
+
+/// Run dbctl with `input` on stdin.
+fn dbctl_with_stdin(home: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_dbctl"))
+        .args(args)
+        .env("HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run dbctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait for dbctl")
+}
+
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn password_stdin_sets_a_password_that_logs_in() {
+    let home = pg_home();
+    let name = "it_password_stdin";
+    let _ = dbctl(home, &["remove", name, "--force"]);
+    ok(
+        home,
+        &[
+            "init",
+            name,
+            "--version",
+            PG_VERSION,
+            "--port",
+            "25513",
+            "--username",
+            "postgres",
+            "--auth",
+            "password",
+        ],
+    );
+    let _cluster = Cluster {
+        name: name.to_string(),
+        port: 25513,
+    };
+    ok(home, &["start", name]);
+
+    let args = ["create-user", "app", "--password-stdin", "-c", name];
+    let out = dbctl_with_stdin(home, &args, "from-stdin-pw\n");
+    assert!(out.status.success(), "{}", describe(&args, &out));
+    ok(home, &["create-db", "appdb", "--owner", "app", "-c", name]);
+
+    let login = psql(
+        "postgresql://app:from-stdin-pw@127.0.0.1:25513/appdb",
+        "select 1",
+    );
+    assert!(
+        login.status.success(),
+        "{}",
+        String::from_utf8_lossy(&login.stderr)
+    );
+
+    let empty = dbctl_with_stdin(
+        home,
+        &["create-user", "other", "--password-stdin", "-c", name],
+        "\n",
+    );
+    assert!(!empty.status.success());
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("empty password"));
+}
+
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn dumpall_captures_roles_and_data_atomically() {
+    let home = pg_home();
+    let cluster = Cluster::started("it_dumpall", 25514);
+    let c = cluster.name.as_str();
+    ok(
+        home,
+        &["create-user", "dumpuser", "--password", "dump-pw", "-c", c],
+    );
+    ok(
+        home,
+        &["create-db", "dumpdb", "--owner", "dumpuser", "-c", c],
+    );
+    cluster.sql(
+        "dumpdb",
+        "create table t (v text); insert into t values ('dumped_row');",
+    );
+
+    let dump = home.join("it_dumpall.sql");
+    let dump_path = dump.to_str().expect("utf-8 path");
+    ok(home, &["dumpall", "-o", dump_path, "-c", c]);
+    let sql = std::fs::read_to_string(&dump).expect("read dump");
+    assert!(sql.contains("CREATE ROLE dumpuser"), "role missing");
+    assert!(
+        sql.contains("SCRAM-SHA-256$") || sql.contains("PASSWORD"),
+        "password hash missing"
+    );
+    assert!(sql.contains("dumped_row"), "data missing");
+    assert!(!home.join("it_dumpall.sql.tmp").exists());
+
+    ok(home, &["stop", c]);
+    assert!(fails(home, &["dumpall", "-o", dump_path, "-c", c]).contains("not running"));
+}
