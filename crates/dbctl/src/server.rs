@@ -237,10 +237,7 @@ pub async fn install_postgres(version: &str) -> Result<()> {
 
     println!("✓ PostgreSQL {} installed successfully", version);
     println!("\nNext steps:");
-    println!(
-        "  dbctl server init --version {} --name my_cluster --port 5432",
-        version
-    );
+    println!("  dbctl server init --version {} --name my_cluster --port 5432", version);
 
     Ok(())
 }
@@ -674,9 +671,10 @@ pub fn get_all_clusters() -> Result<Vec<(String, ClusterMetadata)>> {
         return Ok(clusters);
     }
 
-    for entry in fs::read_dir(&clusters_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
+    // An entry that vanishes or cannot be read mid-scan (a concurrent
+    // `dbctl remove`) is skipped, like a cluster with unreadable metadata.
+    for entry in fs::read_dir(&clusters_dir)?.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Ok(metadata) = load_cluster_metadata(&name) {
                 clusters.push((name, metadata));
@@ -688,7 +686,10 @@ pub fn get_all_clusters() -> Result<Vec<(String, ClusterMetadata)>> {
 }
 
 pub fn is_cluster_running(name: &str) -> Result<bool> {
-    let metadata = load_cluster_metadata(name)?;
+    pg_ctl_reports_running(&load_cluster_metadata(name)?)
+}
+
+fn pg_ctl_reports_running(metadata: &ClusterMetadata) -> Result<bool> {
     let version_dir = get_version_dir(&metadata.version);
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
@@ -711,29 +712,39 @@ pub struct ClusterSummary {
 }
 
 pub fn cluster_summary(name: &str) -> Result<ClusterSummary> {
-    let metadata = load_cluster_metadata(name)?;
-    let status = if is_cluster_running(name)? {
+    Ok(summarize(name.to_string(), load_cluster_metadata(name)?))
+}
+
+/// Every cluster, sorted by name (directory order is not stable).
+///
+/// Built from the metadata the directory scan already loaded, not by loading
+/// each cluster again: a cluster removed in between, or one with unreadable
+/// metadata, must not fail the whole list: a caller automating deploys would
+/// treat a failed list as a failed deploy.
+pub fn cluster_summaries() -> Result<Vec<ClusterSummary>> {
+    let mut summaries: Vec<_> = get_all_clusters()?
+        .into_iter()
+        .map(|(name, metadata)| summarize(name, metadata))
+        .collect();
+    summaries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(summaries)
+}
+
+fn summarize(name: String, metadata: ClusterMetadata) -> ClusterSummary {
+    // pg_ctl that cannot even run (its version was uninstalled) means the
+    // cluster cannot be running either.
+    let status = if pg_ctl_reports_running(&metadata).unwrap_or(false) {
         "running"
     } else {
         "stopped"
     };
-    Ok(ClusterSummary {
-        name: name.to_string(),
+    ClusterSummary {
+        name,
         version: metadata.version,
         port: metadata.port,
         username: metadata.username,
         status,
-    })
-}
-
-/// Every cluster, sorted by name (directory order is not stable).
-pub fn cluster_summaries() -> Result<Vec<ClusterSummary>> {
-    let mut summaries = get_all_clusters()?
-        .into_iter()
-        .map(|(name, _)| cluster_summary(&name))
-        .collect::<Result<Vec<_>>>()?;
-    summaries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(summaries)
+    }
 }
 
 pub fn ensure_cluster_running(name: &str) -> Result<()> {

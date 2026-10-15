@@ -566,9 +566,17 @@ fn resolve_cluster(name: Option<String>) -> Result<String> {
     );
 }
 
+/// Remember `cluster` as the default for later commands. Only a convenience:
+/// a failure is reported, but never fails a command that already succeeded.
 fn save_context(cluster: &str) -> Result<()> {
-    let mut context = Context::load()?;
-    context.set_last_cluster(cluster.to_string())?;
+    let saved =
+        Context::load().and_then(|mut context| context.set_last_cluster(cluster.to_string()));
+    if let Err(e) = saved {
+        eprintln!(
+            "Could not remember '{}' as the default cluster: {}",
+            cluster, e
+        );
+    }
     Ok(())
 }
 
