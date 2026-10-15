@@ -439,43 +439,11 @@ fn extract_zip_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path
 
     let file = fs::File::open(file_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
-
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let outpath = dest_dir.join(file.name());
-
-        if file.is_dir() {
-            fs::create_dir_all(&outpath)?;
-        } else if file.is_symlink() {
-            // Handle symlinks
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut link_target = String::new();
-            std::io::Read::read_to_string(&mut file, &mut link_target)?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::symlink;
-                symlink(&link_target, &outpath)?;
-            }
-        } else {
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut outfile = fs::File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
-        }
-
-        // Set Unix permissions if available (skip symlinks as they don't need permissions)
-        #[cfg(unix)]
-        if let Some(mode) = file.unix_mode()
-            && !file.is_symlink()
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
-        }
-    }
+    // The crate's extractor sanitizes entry paths (no `..` or absolute
+    // paths), only creates symlinks that resolve inside dest_dir, and applies
+    // Unix permissions without following links - none of which a hand-rolled
+    // loop over raw entry names gets right.
+    archive.extract(dest_dir)?;
 
     println!("✓ Extraction complete");
 
