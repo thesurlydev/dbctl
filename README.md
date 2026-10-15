@@ -42,6 +42,27 @@ dbctl createdb myapp      # Create a database
 dbctl use myapp           # Start interactive SQL REPL
 ```
 
+### Scripting
+
+Without a terminal (CI, scripts, automation), `dbctl init` never
+prompts: pass the cluster name (and `--version` when several are installed),
+and it leaves the cluster stopped for an explicit `dbctl start`. `start` on a
+running cluster succeeds without doing anything.
+
+Machine-readable output, one JSON value on stdout:
+
+```bash
+dbctl versions --json                 # {"available": [...], "installed": [...]}
+dbctl list --json                     # [{"name","version","port","username","status"}]
+dbctl status <name> --json            # one cluster, same shape as list
+dbctl databases --cluster <c> --json  # ["app", "postgres"]
+dbctl users --cluster <c> --json      # [{"name","superuser","create_db","create_role"}]
+```
+
+`databases` and `users` with `--json` require a running cluster rather than
+starting one. callers parse this output, and the tests pin it in
+tests, so treat it as an interface.
+
 ## Directory Structure
 
 All data is stored in `~/.dbctl/`:

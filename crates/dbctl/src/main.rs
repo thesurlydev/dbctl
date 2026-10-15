@@ -24,7 +24,11 @@ enum Commands {
     },
 
     /// List available PostgreSQL versions
-    Versions,
+    Versions {
+        /// Print {"available": [...], "installed": [...]} as JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Manage the local PostgreSQL binary cache
     Cache {
@@ -78,11 +82,19 @@ enum Commands {
     Status {
         /// Cluster name (optional - shows all if omitted)
         name: Option<String>,
+
+        /// Print the cluster's name, version, port, username, and status as JSON
+        #[arg(long, requires = "name")]
+        json: bool,
     },
 
     /// List everything (alias: ls)
     #[command(alias = "ls")]
-    List,
+    List {
+        /// Print every cluster's name, version, port, username, and status as JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Remove a cluster
     #[command(alias = "rm")]
@@ -140,6 +152,10 @@ enum Commands {
         /// Cluster name (optional - shows all if omitted)
         #[arg(long, short = 'c')]
         cluster: Option<String>,
+
+        /// Print the cluster's database names as a JSON array
+        #[arg(long, requires = "cluster")]
+        json: bool,
     },
 
     /// Open interactive psql shell
@@ -223,6 +239,10 @@ enum Commands {
         /// Cluster name (optional - auto-selected)
         #[arg(long, short = 'c')]
         cluster: Option<String>,
+
+        /// Print the users and their role flags as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Manage PostgreSQL extensions (build, install, enable)
@@ -267,7 +287,10 @@ async fn main() -> Result<()> {
         Some(Commands::Install { version }) => {
             server::handle_action(server::ServerAction::Install { version }).await?;
         }
-        Some(Commands::Versions) => {
+        Some(Commands::Versions { json: true }) => {
+            print_json(&server::versions_report()?)?;
+        }
+        Some(Commands::Versions { json: false }) => {
             server::list_available_versions()?;
         }
         Some(Commands::Cache { action }) => {
@@ -302,14 +325,23 @@ async fn main() -> Result<()> {
             let cluster = resolve_cluster(name)?;
             server::handle_action(server::ServerAction::Reload { name: cluster }).await?;
         }
-        Some(Commands::Status { name }) => {
+        Some(Commands::Status {
+            name: Some(cluster),
+            json: true,
+        }) => {
+            print_json(&server::cluster_summary(&cluster)?)?;
+        }
+        Some(Commands::Status { name, .. }) => {
             if let Some(cluster) = name {
                 server::handle_action(server::ServerAction::Status { name: cluster }).await?;
             } else {
                 show_all_status().await?;
             }
         }
-        Some(Commands::List) => {
+        Some(Commands::List { json: true }) => {
+            print_json(&server::cluster_summaries()?)?;
+        }
+        Some(Commands::List { json: false }) => {
             show_list().await?;
         }
         Some(Commands::Remove { name, force }) => {
@@ -358,7 +390,15 @@ async fn main() -> Result<()> {
             .await?;
             save_context(&cluster)?;
         }
-        Some(Commands::Databases { cluster }) => {
+        Some(Commands::Databases {
+            cluster: Some(cluster_name),
+            json: true,
+        }) => {
+            let cluster = resolve_cluster(Some(cluster_name))?;
+            require_running(&cluster)?;
+            print_json(&postgres::list_databases(&cluster).await?)?;
+        }
+        Some(Commands::Databases { cluster, .. }) => {
             if let Some(cluster_name) = cluster {
                 let cluster = resolve_cluster(Some(cluster_name))?;
                 server::ensure_cluster_running(&cluster)?;
@@ -448,7 +488,18 @@ async fn main() -> Result<()> {
             .await?;
             save_context(&cluster)?;
         }
-        Some(Commands::Users { cluster }) => {
+        Some(Commands::Users {
+            cluster,
+            json: true,
+        }) => {
+            let cluster = resolve_cluster(cluster)?;
+            require_running(&cluster)?;
+            print_json(&postgres::list_users(&cluster).await?)?;
+        }
+        Some(Commands::Users {
+            cluster,
+            json: false,
+        }) => {
             let cluster = resolve_cluster(cluster)?;
             server::ensure_cluster_running(&cluster)?;
             postgres::handle_action(postgres::DbAction::User {
@@ -599,6 +650,24 @@ async fn show_overview() -> Result<()> {
     Ok(())
 }
 
+/// Write `value` to stdout as one line of JSON. JSON output is a contract
+/// with the programs that drive dbctl, so nothing else may go to stdout on
+/// these paths.
+fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string(value)?);
+    Ok(())
+}
+
+/// JSON reads report on the cluster as it is. Unlike the human-readable
+/// commands they do not start a stopped cluster, which would print progress
+/// to stdout and turn a read into a state change.
+fn require_running(cluster: &str) -> Result<()> {
+    if !server::is_cluster_running(cluster)? {
+        bail!("Cluster '{}' is not running", cluster);
+    }
+    Ok(())
+}
+
 async fn show_all_status() -> Result<()> {
     show_overview().await
 }
@@ -637,10 +706,18 @@ async fn handle_init(
     username: Option<String>,
 ) -> Result<()> {
     use dialoguer::{Confirm, Input};
+    use std::io::IsTerminal;
+
+    // Automation and scripts run dbctl with no terminal attached, where any
+    // dialoguer prompt fails outright ("not a terminal"). Without one, take
+    // the defaults a prompt would offer, and name what is missing otherwise.
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
 
     // Get cluster name
     let name = if let Some(n) = name {
         n
+    } else if !interactive {
+        bail!("A cluster name is required when not running in a terminal");
     } else {
         Input::<String>::new()
             .with_prompt("Cluster name")
@@ -661,6 +738,11 @@ async fn handle_init(
             let v = versions[0].clone();
             println!("Using PostgreSQL {}", v.green());
             v
+        } else if !interactive {
+            bail!(
+                "Several PostgreSQL versions are installed ({}); pass --version",
+                versions.join(", ")
+            );
         } else {
             let selection = dialoguer::Select::new()
                 .with_prompt("Select PostgreSQL version")
@@ -683,6 +765,8 @@ async fn handle_init(
     // Get username
     let username = if let Some(u) = username {
         u
+    } else if !interactive {
+        "postgres".to_string()
     } else {
         Input::<String>::new()
             .with_prompt("Superuser name")
@@ -699,11 +783,13 @@ async fn handle_init(
     })
     .await?;
 
-    // Ask if they want to start it
-    if Confirm::new()
-        .with_prompt("Start the cluster now?")
-        .default(true)
-        .interact()?
+    // Ask if they want to start it. Without a terminal, leave it stopped:
+    // the caller starts it explicitly (`dbctl start <name>`).
+    if interactive
+        && Confirm::new()
+            .with_prompt("Start the cluster now?")
+            .default(true)
+            .interact()?
     {
         server::start_cluster(&name)?;
     }

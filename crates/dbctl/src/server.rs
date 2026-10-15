@@ -284,6 +284,23 @@ fn normalize_version(version: &str) -> String {
     }
 }
 
+/// What `dbctl versions --json` prints: what can be installed, and what is.
+#[derive(Debug, serde::Serialize)]
+pub struct VersionsReport {
+    pub available: Vec<String>,
+    pub installed: Vec<String>,
+}
+
+pub fn versions_report() -> Result<VersionsReport> {
+    Ok(VersionsReport {
+        available: AVAILABLE_VERSIONS
+            .iter()
+            .map(|(_major, full)| full.to_string())
+            .collect(),
+        installed: get_installed_versions()?,
+    })
+}
+
 pub fn list_available_versions() -> Result<()> {
     let installed = get_installed_versions()?;
 
@@ -549,7 +566,7 @@ pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Res
     conf_content.push_str(&format!("\nport = {}\n", port));
     conf_content.push_str(&format!(
         "unix_socket_directories = '{}'\n",
-        cluster_dir.to_str().unwrap()
+        socket_dir_for(&cluster_dir, port).display()
     ));
     fs::write(conf_path, conf_content)?;
 
@@ -567,9 +584,30 @@ pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Res
     println!("  Port: {}", port);
     println!("  User: {}", username);
     println!("\nTo start the cluster:");
-    println!("  dbctl server start --name {}", name);
+    println!("  dbctl start {}", name);
 
     Ok(())
+}
+
+/// Longest unix socket path the platform accepts (`sun_path` less its NUL).
+#[cfg(target_os = "macos")]
+const MAX_SOCKET_PATH: usize = 103;
+#[cfg(not(target_os = "macos"))]
+const MAX_SOCKET_PATH: usize = 107;
+
+/// Where a cluster's unix socket goes: its own directory when the socket
+/// path fits the platform limit, otherwise /tmp, PostgreSQL's own default.
+/// Under a deep HOME the cluster directory alone is too long, and PostgreSQL
+/// then refuses to start at all ("Unix-domain socket path ... is too long").
+/// dbctl itself always connects over TCP, so only local psql users see where
+/// the socket lives.
+fn socket_dir_for(cluster_dir: &std::path::Path, port: u16) -> PathBuf {
+    let socket = cluster_dir.join(format!(".s.PGSQL.{}", port));
+    if socket.as_os_str().len() <= MAX_SOCKET_PATH {
+        cluster_dir.to_path_buf()
+    } else {
+        PathBuf::from("/tmp")
+    }
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -661,6 +699,43 @@ pub fn is_cluster_running(name: &str) -> Result<bool> {
     Ok(output.status.success())
 }
 
+/// One cluster as `dbctl list --json` and `dbctl status <name> --json` print it.
+#[derive(Debug, serde::Serialize)]
+pub struct ClusterSummary {
+    pub name: String,
+    pub version: String,
+    pub port: u16,
+    pub username: String,
+    /// `running` or `stopped`.
+    pub status: &'static str,
+}
+
+pub fn cluster_summary(name: &str) -> Result<ClusterSummary> {
+    let metadata = load_cluster_metadata(name)?;
+    let status = if is_cluster_running(name)? {
+        "running"
+    } else {
+        "stopped"
+    };
+    Ok(ClusterSummary {
+        name: name.to_string(),
+        version: metadata.version,
+        port: metadata.port,
+        username: metadata.username,
+        status,
+    })
+}
+
+/// Every cluster, sorted by name (directory order is not stable).
+pub fn cluster_summaries() -> Result<Vec<ClusterSummary>> {
+    let mut summaries = get_all_clusters()?
+        .into_iter()
+        .map(|(name, _)| cluster_summary(&name))
+        .collect::<Result<Vec<_>>>()?;
+    summaries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(summaries)
+}
+
 pub fn ensure_cluster_running(name: &str) -> Result<()> {
     if !is_cluster_running(name)? {
         start_cluster(name)?;
@@ -670,6 +745,13 @@ pub fn ensure_cluster_running(name: &str) -> Result<()> {
 
 pub fn start_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
+
+    // Starting a running cluster is the desired end state, not an error:
+    // pg_ctl would fail on the port it already holds.
+    if is_cluster_running(name)? {
+        println!("Cluster '{}' is already running", name);
+        return Ok(());
+    }
     let version_dir = get_version_dir(&metadata.version);
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
@@ -1094,6 +1176,61 @@ fn get_directory_size_bytes(path: &PathBuf) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn socket_stays_in_the_cluster_dir_when_it_fits() {
+        let dir = PathBuf::from("/home/app/.dbctl/clusters/main");
+        assert_eq!(socket_dir_for(&dir, 5432), dir);
+    }
+
+    #[test]
+    fn socket_falls_back_to_tmp_under_a_deep_home() {
+        let deep = PathBuf::from(format!("/{}/.dbctl/clusters/main", "d".repeat(100)));
+        assert_eq!(socket_dir_for(&deep, 5432), PathBuf::from("/tmp"));
+    }
+
+    // `--json` output is a public interface that callers parse: these exact
+    // strings are pinned, so change a shape only as a breaking change.
+    #[test]
+    fn cluster_summary_json_shape() {
+        let summary = ClusterSummary {
+            name: "main".to_string(),
+            version: "16.3".to_string(),
+            port: 5432,
+            username: "app".to_string(),
+            status: "running",
+        };
+        assert_eq!(
+            serde_json::to_string(&vec![summary]).unwrap(),
+            r#"[{"name":"main","version":"16.3","port":5432,"username":"app","status":"running"}]"#
+        );
+    }
+
+    #[test]
+    fn versions_report_json_shape() {
+        let report = VersionsReport {
+            available: vec!["18.4".to_string(), "17.10".to_string()],
+            installed: vec!["16.3".to_string()],
+        };
+        assert_eq!(
+            serde_json::to_string(&report).unwrap(),
+            r#"{"available":["18.4","17.10"],"installed":["16.3"]}"#
+        );
+    }
+
+    #[test]
+    fn user_info_json_shape() {
+        let user = crate::postgres::UserInfo {
+            name: "app".to_string(),
+            superuser: true,
+            create_db: true,
+            create_role: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&vec![user]).unwrap(),
+            r#"[{"name":"app","superuser":true,"create_db":true,"create_role":true}]"#
+        );
+    }
 
     #[test]
     fn test_normalize_version_major_only() {
