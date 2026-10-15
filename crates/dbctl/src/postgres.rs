@@ -8,6 +8,19 @@ use std::process::Command;
 
 use crate::connection::{ConnectionSource, connect};
 
+/// A SQL identifier, double-quoted so any name (mixed case, spaces, quotes)
+/// is taken literally rather than parsed as SQL.
+pub(crate) fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// A SQL string literal, single-quoted with quotes doubled. Safe with the
+/// default standard_conforming_strings = on, under which backslashes are
+/// ordinary characters.
+pub(crate) fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 #[derive(Debug, Clone, ValueEnum)]
 pub enum GrantTarget {
     Database,
@@ -302,7 +315,7 @@ pub async fn create_database_with_source(
     }
 
     // Create database
-    let query = format!("CREATE DATABASE {}", database);
+    let query = format!("CREATE DATABASE {}", quote_ident(database));
     client.batch_execute(&query).await?;
 
     Ok(true) // Created successfully
@@ -336,7 +349,7 @@ pub async fn drop_database_with_source(source: &ConnectionSource, database: &str
     client.batch_execute(&terminate_query).await.ok();
 
     // Drop database
-    let query = format!("DROP DATABASE IF EXISTS {}", database);
+    let query = format!("DROP DATABASE IF EXISTS {}", quote_ident(database));
     client.batch_execute(&query).await?;
 
     Ok(())
@@ -672,9 +685,9 @@ pub async fn create_user(
     }
 
     // Build CREATE USER query
-    let mut query = format!("CREATE USER {}", username);
+    let mut query = format!("CREATE USER {}", quote_ident(username));
     if let Some(pwd) = password {
-        query.push_str(&format!(" PASSWORD '{}'", pwd));
+        query.push_str(&format!(" PASSWORD {}", quote_literal(pwd)));
     }
     if superuser {
         query.push_str(" SUPERUSER");
@@ -754,7 +767,7 @@ async fn drop_user(cluster: &str, username: &str) -> Result<()> {
     });
 
     // Drop user
-    let query = format!("DROP USER IF EXISTS {}", username);
+    let query = format!("DROP USER IF EXISTS {}", quote_ident(username));
     client.batch_execute(&query).await?;
 
     println!("✓ Dropped user '{}' from cluster '{}'", username, cluster);
@@ -788,15 +801,27 @@ async fn grant_privileges(
     // Build GRANT query based on target
     let query = match on {
         GrantTarget::Database => {
-            format!("GRANT {} ON DATABASE {} TO {}", privileges, database, user)
+            format!(
+                "GRANT {} ON DATABASE {} TO {}",
+                privileges,
+                quote_ident(database),
+                quote_ident(user)
+            )
         }
         GrantTarget::Schema => {
-            format!("GRANT {} ON SCHEMA {} TO {}", privileges, schema, user)
+            format!(
+                "GRANT {} ON SCHEMA {} TO {}",
+                privileges,
+                quote_ident(schema),
+                quote_ident(user)
+            )
         }
         GrantTarget::AllTables => {
             format!(
                 "GRANT {} ON ALL TABLES IN SCHEMA {} TO {}",
-                privileges, schema, user
+                privileges,
+                quote_ident(schema),
+                quote_ident(user)
             )
         }
     };
@@ -845,16 +870,25 @@ async fn revoke_privileges(
         RevokeTarget::Database => {
             format!(
                 "REVOKE {} ON DATABASE {} FROM {}",
-                privileges, database, user
+                privileges,
+                quote_ident(database),
+                quote_ident(user)
             )
         }
         RevokeTarget::Schema => {
-            format!("REVOKE {} ON SCHEMA {} FROM {}", privileges, schema, user)
+            format!(
+                "REVOKE {} ON SCHEMA {} FROM {}",
+                privileges,
+                quote_ident(schema),
+                quote_ident(user)
+            )
         }
         RevokeTarget::AllTables => {
             format!(
                 "REVOKE {} ON ALL TABLES IN SCHEMA {} FROM {}",
-                privileges, schema, user
+                privileges,
+                quote_ident(schema),
+                quote_ident(user)
             )
         }
     };
@@ -1940,5 +1974,29 @@ fn print_result_table(columns: &[String], rows: &[Vec<Option<String>>]) {
             .collect::<Vec<_>>()
             .join("|");
         println!("{}", line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifiers_are_taken_literally() {
+        assert_eq!(quote_ident("app"), "\"app\"");
+        assert_eq!(quote_ident("My App"), "\"My App\"");
+        assert_eq!(
+            quote_ident("a\"; DROP DATABASE x; --"),
+            "\"a\"\"; DROP DATABASE x; --\""
+        );
+    }
+
+    #[test]
+    fn literals_double_their_quotes() {
+        assert_eq!(quote_literal("pw"), "'pw'");
+        assert_eq!(
+            quote_literal("it's'; DROP ROLE x; --"),
+            "'it''s''; DROP ROLE x; --'"
+        );
     }
 }
