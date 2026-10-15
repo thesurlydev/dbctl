@@ -237,7 +237,7 @@ pub async fn install_postgres(version: &str) -> Result<()> {
 
     println!("✓ PostgreSQL {} installed successfully", version);
     println!("\nNext steps:");
-    println!("  dbctl server init --version {} --name my_cluster --port 5432", version);
+    println!("  dbctl init my_cluster --version {} --port 5432", version);
 
     Ok(())
 }
@@ -470,7 +470,7 @@ fn list_installed() -> Result<()> {
     if !versions_dir.exists() {
         println!("No PostgreSQL versions installed.");
         println!("\nTo install a version:");
-        println!("  dbctl server install --version 16.3");
+        println!("  dbctl install 16.3");
         return Ok(());
     }
 
@@ -503,7 +503,7 @@ pub fn init_cluster(version: &str, name: &str, port: u16, username: &str) -> Res
 
     if !version_dir.exists() {
         bail!(
-            "PostgreSQL {} is not installed. Run: dbctl server install --version {}",
+            "PostgreSQL {} is not installed. Run: dbctl install {}",
             version,
             version
         );
@@ -916,7 +916,7 @@ fn list_clusters() -> Result<()> {
     if !clusters_dir.exists() {
         println!("No clusters found.");
         println!("\nTo create a cluster:");
-        println!("  dbctl server init --version 16.3 --name my_cluster --port 5432");
+        println!("  dbctl init my_cluster --version 16.3 --port 5432");
         return Ok(());
     }
 
