@@ -7,7 +7,7 @@ How dbctl compares with [pgenv](https://github.com/theory/pgenv), a PostgreSQL b
 | | dbctl | pgenv |
 |---|---|---|
 | Implementation | Rust (single binary, tokio async) | Bash script (rbenv/plenv-style) |
-| How versions are obtained | Downloads prebuilt EnterpriseDB binaries | Compiles PostgreSQL from source |
+| How versions are obtained | Prebuilt EnterpriseDB binaries on macOS; the distribution's packages on Linux | Compiles PostgreSQL from source |
 | Version coverage | Curated list of recent majors (`AVAILABLE_VERSIONS` in `server.rs`) | Practically anything, back to PostgreSQL 8.0 |
 | Install speed | Fast (archive download + extract, plus local binary cache) | Slow (full source build; needs compiler/deps) |
 | Version switching | N/A - each cluster pins its own version; binaries addressed per install | Central concept: `pgenv use/switch` changes the active version |

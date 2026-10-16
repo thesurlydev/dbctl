@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository.
 
 dbctl is a PostgreSQL version and database manager written in Rust. It installs and manages multiple PostgreSQL versions and database clusters without root access or system-wide installation. All state lives in `~/.dbctl/`.
 
-The primary audience is local development: smart defaults, auto-selection of clusters when unambiguous, interactive prompts for missing arguments, and colored output.
+The primary audience is local development: smart defaults, auto-selection of clusters when unambiguous, interactive prompts for missing arguments, and colored output. It is also driven by programs: automation runs it over SSH on servers, with no terminal, and parses its `--json` output.
 
 ## Repository Layout
 
@@ -16,6 +16,8 @@ The primary audience is local development: smart defaults, auto-selection of clu
 ├── crates/
 │   └── dbctl/              # The only crate: both library and binary
 │       ├── Cargo.toml
+│       ├── tests/
+│       │   └── cli.rs      # E2E tests of the real binary, each with a scratch HOME
 │       └── src/
 │           ├── main.rs     # CLI entry point (clap derive, tokio async main)
 │           ├── lib.rs      # Library root; re-exports public API
@@ -25,8 +27,6 @@ The primary audience is local development: smart defaults, auto-selection of clu
 │           ├── extension.rs # Build/install/enable PostgreSQL extensions via PGXS (e.g. pgvector)
 │           ├── cache.rs    # Local binary cache for downloaded PostgreSQL archives
 │           └── context.rs  # Remembers last-used cluster (~/.dbctl/context.json)
-├── tests/
-│   └── integration_tests.rs # E2E tests that run the actual CLI via `cargo run`
 ├── QUICKSTART.md           # User-facing walkthrough of all major features
 └── mise.toml               # Task runner config (dev/test/install tasks)
 ```
@@ -38,9 +38,16 @@ The primary audience is local development: smart defaults, auto-selection of clu
 cargo build
 # or: mise run dev
 
-# Run all tests (single-threaded; tests share ~/.dbctl state)
-cargo test -- --test-threads=1
+# Fast tests (no PostgreSQL needed)
+cargo test
 # or: mise run test
+
+# CLI tests that install PostgreSQL (and build pgvector)
+cargo test --test cli -- --ignored
+# or: mise run test-integration
+
+# Everything that must pass before committing
+mise run check
 
 # Install the binary to ~/.cargo/bin
 cargo install --path crates/dbctl
@@ -51,18 +58,18 @@ cargo fmt
 cargo clippy --all-targets -- -D warnings
 ```
 
-Important: integration tests MUST be run single-threaded (`--test-threads=1`). They operate against the real `~/.dbctl/` directory and will interfere with each other if run in parallel. The integration tests shell out to `cargo run -- ...` and perform real installs/cluster operations, so they are slow and require network access for PostgreSQL binary downloads (subsequent runs hit the local binary cache).
+The CLI tests run the built binary with `HOME` pointed at a scratch directory, so they never touch your `~/.dbctl/`, and with stdin closed, the way automation runs dbctl: no command may wait on a prompt. Each PostgreSQL test gets its own cluster and port, so they run in parallel. They install PostgreSQL once per run, reusing your local download cache when it has the archive.
 
 ## Architecture and Conventions
 
 - Single crate with both a `lib.rs` (library exposing all logic) and `main.rs` (thin CLI layer). CLI commands in `main.rs` use clap's derive API; subcommand enums like `ServerAction`, `DbAction`, `CacheAction`, `ExtensionAction` live in their respective modules so they can be reused.
 - Async runtime is tokio (`#[tokio::main]`). Database connections use `tokio-postgres` with `rustls` for TLS.
 - Error handling uses `anyhow` (`Result`, `bail!`) throughout.
-- PostgreSQL binaries are downloaded from EnterpriseDB build archives, cached in `~/.dbctl/cache/postgres/` keyed by `{version}-{os}-{arch}`, and installed to `~/.dbctl/versions/<version>/`. Clusters live in `~/.dbctl/clusters/<name>/` with a `metadata.json` describing each cluster.
+- On macOS, PostgreSQL binaries are downloaded from EnterpriseDB build archives, cached in `~/.dbctl/cache/postgres/` keyed by `{version}-{os}-{arch}`, and installed to `~/.dbctl/versions/<version>/`. On Linux, EnterpriseDB publishes no binaries for current versions, so `install` links `~/.dbctl/versions/<version>` to the distribution's package (`/usr/lib/postgresql/<major>`, from apt.postgresql.org). Clusters live in `~/.dbctl/clusters/<name>/` with a `metadata.json` describing each cluster.
 - `AVAILABLE_VERSIONS` in `crates/dbctl/src/server.rs` is the source of truth for supported PostgreSQL major versions and their latest minor releases.
 - Cluster management shells out to the installed PostgreSQL binaries (`initdb`, `pg_ctl`, `psql`, `pg_dump`, etc.); extension builds shell out to PGXS (`make` with `PG_CONFIG` pointing at the managed install).
-- Several commands support a `--json` flag for machine-readable output. Preserve this pattern when adding new list/status-style commands.
-- The CLI favors smart defaults: cluster name arguments are optional when only one cluster exists, and stopped clusters are auto-started when accessed. Keep this UX when adding commands.
+- Several commands support a `--json` flag for machine-readable output (see the README's Scripting section). Callers parse it and the tests pin the shapes, so treat it as a public interface: changing a shape is a breaking change. Preserve this pattern when adding new list/status-style commands.
+- The CLI favors smart defaults: cluster name arguments are optional when only one cluster exists, and the human-readable commands auto-start a stopped cluster when they access it. JSON reads do not: they report the cluster as it is, failing on a stopped one. Keep this UX when adding commands.
 - `Server` and `Db` subcommands in `main.rs` are hidden backward-compatibility shims; new functionality goes in the top-level commands.
 
 ## Code Style
@@ -77,8 +84,7 @@ Important: integration tests MUST be run single-threaded (`--test-threads=1`). T
 ## Testing Guidance
 
 - Tests are E2E by design: they invoke the built CLI and verify behavior a real user would see. When fixing a bug, reproduce it through the CLI first, then add or update an integration test covering it.
-- Use the existing `cleanup_test_cluster` / `cleanup_test_version` helpers so tests do not leak state into the user's `~/.dbctl/`.
-- Be careful when running tests on a machine where `~/.dbctl/` contains real user data; the tests share that directory.
+- Use the `Cluster` guard in `tests/cli.rs` (it removes its cluster when dropped, even on failure) and give each test its own port. Tests that need PostgreSQL are `#[ignore]`d so `cargo test` stays fast.
 
 ## Commit and PR Guidance
 
