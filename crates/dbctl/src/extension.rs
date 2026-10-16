@@ -87,11 +87,21 @@ pub enum ExtensionAction {
         database: String,
     },
 
-    /// List extensions installed into a cluster's PostgreSQL version
+    /// List extensions available to a cluster's PostgreSQL version, or with
+    /// --database, the ones created in that database
     List {
         /// Cluster name
         #[arg(long, short = 'c')]
         cluster: String,
+
+        /// List the extensions created in this database (pg_extension)
+        /// instead of the ones available to install
+        #[arg(long, short = 'd')]
+        database: Option<String>,
+
+        /// Print the names as a JSON array
+        #[arg(long)]
+        json: bool,
     },
 
     /// Remove an extension's files from a cluster's PostgreSQL version
@@ -105,7 +115,7 @@ pub enum ExtensionAction {
     },
 }
 
-pub fn handle_action(action: ExtensionAction) -> Result<()> {
+pub async fn handle_action(action: ExtensionAction) -> Result<()> {
     match action {
         ExtensionAction::Install {
             name,
@@ -130,7 +140,16 @@ pub fn handle_action(action: ExtensionAction) -> Result<()> {
             cluster,
             database,
         } => disable(&name, &cluster, &database),
-        ExtensionAction::List { cluster } => list(&cluster),
+        ExtensionAction::List {
+            cluster,
+            database: Some(database),
+            json,
+        } => list_created(&cluster, &database, json).await,
+        ExtensionAction::List {
+            cluster,
+            database: None,
+            json,
+        } => list(&cluster, json),
         ExtensionAction::Uninstall { name, cluster } => uninstall(&name, &cluster),
     }
 }
@@ -299,17 +318,35 @@ fn disable(name: &str, cluster: &str, database: &str) -> Result<()> {
     Ok(())
 }
 
-fn list(cluster: &str) -> Result<()> {
+/// The extensions created in one database. Like dbctl's other reads of a
+/// running cluster, this does not start a stopped one: it reports the
+/// cluster as it is.
+async fn list_created(cluster: &str, database: &str, json: bool) -> Result<()> {
+    if !crate::server::is_cluster_running(cluster)? {
+        bail!("Cluster '{}' is not running", cluster);
+    }
+    let created = crate::postgres::list_extensions(cluster, database).await?;
+    if json {
+        println!("{}", serde_json::to_string(&created)?);
+        return Ok(());
+    }
+    println!(
+        "Extensions created in database '{}' on cluster '{}':",
+        database, cluster
+    );
+    for name in &created {
+        println!("  {}", name);
+    }
+    Ok(())
+}
+
+fn list(cluster: &str, json: bool) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
     let version_dir = crate::server::get_version_dir(&metadata.version);
     let pg_config = version_dir.join("bin/pg_config");
     let share_dir = pg_config_out(&pg_config, "--sharedir")?;
     let ext_dir = PathBuf::from(&share_dir).join("extension");
 
-    println!(
-        "Extensions available to cluster '{}' (PostgreSQL {}):",
-        cluster, metadata.version
-    );
     let mut found = Vec::new();
     if ext_dir.exists() {
         for entry in fs::read_dir(&ext_dir)? {
@@ -323,6 +360,14 @@ fn list(cluster: &str) -> Result<()> {
         }
     }
     found.sort();
+    if json {
+        println!("{}", serde_json::to_string(&found)?);
+        return Ok(());
+    }
+    println!(
+        "Extensions available to cluster '{}' (PostgreSQL {}):",
+        cluster, metadata.version
+    );
     for f in &found {
         println!("  {}", f);
     }

@@ -391,6 +391,26 @@ pub async fn list_databases(cluster: &str) -> Result<Vec<String>> {
     list_databases_with_source(&source).await
 }
 
+/// Extensions created in a database (`pg_extension`), by their
+/// `CREATE EXTENSION` names. Every database has at least `plpgsql`.
+pub async fn list_extensions_with_source(
+    source: &ConnectionSource,
+    database: &str,
+) -> Result<Vec<String>> {
+    let (client, _handle) = connect(source, Some(database)).await?;
+
+    let rows = client
+        .query("SELECT extname FROM pg_extension ORDER BY extname", &[])
+        .await?;
+
+    Ok(rows.iter().map(|row| row.get(0)).collect())
+}
+
+pub async fn list_extensions(cluster: &str, database: &str) -> Result<Vec<String>> {
+    let source = ConnectionSource::from_cluster(cluster)?;
+    list_extensions_with_source(&source, database).await
+}
+
 async fn print_databases(cluster: &str) -> Result<()> {
     let databases = list_databases(cluster).await?;
     if databases.is_empty() {

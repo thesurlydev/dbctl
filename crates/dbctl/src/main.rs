@@ -553,7 +553,7 @@ async fn main() -> Result<()> {
             postgres::dumpall(&cluster, &output)?;
         }
         Some(Commands::Extension { action }) => {
-            extension::handle_action(action)?;
+            extension::handle_action(action).await?;
         }
         Some(Commands::Use { database, cluster }) => {
             let cluster = resolve_cluster(cluster)?;

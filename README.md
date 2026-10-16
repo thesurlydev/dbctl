@@ -83,7 +83,7 @@ Restart=always
 
 ### Scripting
 
-Without a terminal (CI, scripts, automation), `dbctl init` never
+Without a terminal (CI, scripts, automation over SSH), `dbctl init` never
 prompts: pass the cluster name (and `--version` when several are installed),
 and it leaves the cluster stopped for an explicit `dbctl start`. `start` on a
 running cluster succeeds without doing anything.
@@ -96,6 +96,8 @@ dbctl list --json                     # [{"name","version","port","username","st
 dbctl status <name> --json            # one cluster, same shape as list
 dbctl databases --cluster <c> --json  # ["app", "postgres"]
 dbctl users --cluster <c> --json      # [{"name","superuser","create_db","create_role"}]
+dbctl extension list -c <c> --json              # ["hstore", "vector", ...] available to install
+dbctl extension list -c <c> -d <db> --json      # ["plpgsql", "vector"] created in <db>
 ```
 
 Secrets and backups:
@@ -105,9 +107,9 @@ printf '%s\n' "$PW" | dbctl create-user app --password-stdin -c main  # not in p
 dbctl dumpall -c main -o /backups/main.sql   # every database and role, written atomically
 ```
 
-`databases` and `users` with `--json` require a running cluster rather than
-starting one. callers parse this output, and the tests pin it in
-tests, so treat it as an interface.
+`databases`, `users`, and `extension list --database` with `--json` require a
+running cluster rather than starting one. These shapes are pinned in tests and
+are a stable interface: a change to one is a breaking change.
 
 ## Development
 

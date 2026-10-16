@@ -521,6 +521,70 @@ fn extension_install_enable_list_uninstall() {
     );
 }
 
+/// Automation checks a database's extensions with `extension list --database
+/// --json`, so the shape is pinned: a JSON array of `CREATE EXTENSION` names.
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn extension_list_reports_what_a_database_has() {
+    let home = pg_home();
+    let cluster = Cluster::started("it_extension_list", 25515);
+    let c = cluster.name.as_str();
+    let created = || {
+        json(
+            home,
+            &[
+                "extension",
+                "list",
+                "--cluster",
+                c,
+                "--database",
+                "postgres",
+                "--json",
+            ],
+        )
+    };
+
+    assert_eq!(created(), serde_json::json!(["plpgsql"]));
+    ok(
+        home,
+        &[
+            "extension",
+            "enable",
+            "hstore",
+            "--cluster",
+            c,
+            "--database",
+            "postgres",
+        ],
+    );
+    assert_eq!(created(), serde_json::json!(["hstore", "plpgsql"]));
+
+    let available = json(home, &["extension", "list", "--cluster", c, "--json"]);
+    assert!(
+        available
+            .as_array()
+            .is_some_and(|names| names.iter().any(|n| n == "hstore")),
+        "hstore ships with PostgreSQL: {available}"
+    );
+
+    // Like every JSON read, it reports a stopped cluster instead of starting it.
+    ok(home, &["stop", c]);
+    let stderr = fails(
+        home,
+        &[
+            "extension",
+            "list",
+            "--cluster",
+            c,
+            "--database",
+            "postgres",
+            "--json",
+        ],
+    );
+    assert!(stderr.contains("not running"), "{stderr}");
+    assert_eq!(cluster.status()["status"], "stopped");
+}
+
 /// psql from the shared install, for connecting the way an application does.
 fn psql(url: &str, sql: &str) -> Output {
     Command::new(pg_home().join(format!(".dbctl/versions/{PG_VERSION}/bin/psql")))

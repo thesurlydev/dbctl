@@ -37,6 +37,7 @@ pub use postgres::{
     get_table_structure_with_source,
     insert_row_with_source,
     list_databases_with_source,
+    list_extensions_with_source,
     list_schemas_with_source,
     list_tables_with_source,
     list_users_with_source,
