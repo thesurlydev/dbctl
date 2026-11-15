@@ -47,7 +47,7 @@ cargo test --test cli -- --ignored
 # or: mise run test-integration
 
 # Everything that must pass before committing
-mise run check
+mise run gate
 
 # Install the binary to ~/.cargo/bin
 cargo install --path crates/dbctl

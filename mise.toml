@@ -10,8 +10,11 @@ run = "cargo test"
 description = "Run the CLI tests that install PostgreSQL and build pgvector (slow)"
 run = "cargo test --test cli -- --ignored"
 
-[tasks.check]
+# `gate` is the name every repo uses for its full pre-commit check; `check`
+# stays as an alias.
+[tasks.gate]
 description = "Build, test, lint (warnings are errors), and check formatting"
+alias = "check"
 run = [
   "cargo build",
   "cargo test",

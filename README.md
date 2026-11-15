@@ -114,7 +114,7 @@ are a stable interface: a change to one is a breaking change.
 ## Development
 
 ```bash
-mise run check              # build, test, clippy -D warnings, fmt --check
+mise run gate               # build, test, clippy -D warnings, fmt --check
 mise run test-integration   # CLI tests that install PostgreSQL (slow)
 ```
 
