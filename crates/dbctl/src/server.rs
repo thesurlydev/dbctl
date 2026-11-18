@@ -1,10 +1,12 @@
 // src/server.rs
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use colored::Colorize;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,14 +15,58 @@ use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 /// Available PostgreSQL versions and their latest minor releases (newest first).
 /// This is the source of truth used by both `normalize_version()` and `list_available_versions()`.
 /// See https://www.enterprisedb.com/software-downloads-postgres for the latest versions.
-pub const AVAILABLE_VERSIONS: &[(&str, &str)] = &[
-    ("18", "18.4"),
-    ("17", "17.10"),
-    ("16", "16.14"),
-    ("15", "15.18"),
-    ("14", "14.23"),
-    ("13", "13.23"),
+/// A PostgreSQL release dbctl installs, with the SHA-256 of EnterpriseDB's
+/// macOS archive for it (postgresql-<version>-1-osx-binaries.zip). macOS
+/// installs only these releases and checks every archive, downloaded or
+/// cached, against its hash before unpacking it. Linux uses the system's
+/// packages and downloads nothing.
+pub struct Release {
+    pub major: &'static str,
+    pub version: &'static str,
+    pub macos_sha256: &'static str,
+}
+
+/// Every supported major version and its latest minor release. To add or bump
+/// one, download the archive and record `shasum -a 256` of it here.
+pub const AVAILABLE_VERSIONS: &[Release] = &[
+    Release {
+        major: "18",
+        version: "18.4",
+        macos_sha256: "e3af8c3b4a98a790dba60f2733673b35712a81a201b1f9af6e8ebed5d3b64d0c",
+    },
+    Release {
+        major: "17",
+        version: "17.10",
+        macos_sha256: "67b32bd5ab4e41dc7d8233c5077001b4b2f3f3c92635e214807c86a22968fe03",
+    },
+    Release {
+        major: "16",
+        version: "16.14",
+        macos_sha256: "95babe9b539b8f251585bc49518db4328d2b104fb7b5ad058f5cc967518422b2",
+    },
+    Release {
+        major: "15",
+        version: "15.18",
+        macos_sha256: "7b6ec3d801d53420f45a81268689d8e4d80a25ebdfc1a54b9d6f81a0e2359abc",
+    },
+    Release {
+        major: "14",
+        version: "14.23",
+        macos_sha256: "1affd597279db056fd3023552ddc3e6f35dcd8a2f31d0847ce5de6d37a218313",
+    },
+    Release {
+        major: "13",
+        version: "13.23",
+        macos_sha256: "622604b1bb62f74ef5e7fca733d741f3fdd2db73ac4c2b51b43e154d5c651679",
+    },
 ];
+
+/// The pinned release a version names, by major ("16") or in full ("16.14").
+pub fn find_release(version: &str) -> Option<&'static Release> {
+    AVAILABLE_VERSIONS
+        .iter()
+        .find(|r| r.major == version || r.version == version)
+}
 
 #[derive(Subcommand)]
 pub enum ServerAction {
@@ -195,17 +241,17 @@ fn get_clusters_dir() -> PathBuf {
 /// joined onto ~/.dbctl and the result is created, read and removed: `..`, a
 /// slash or an absolute path would reach directories outside it.
 pub fn validate_name(kind: &str, name: &str) -> Result<()> {
-    let plain = !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name.len() <= 64
+    // The first character is a letter or digit, which also rules out `.`,
+    // `..` and the hidden staging directories an install unpacks into.
+    let plain = name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     if !plain {
         bail!(
             "invalid {kind} '{name}': use letters, digits, '.', '_' and '-' (at most 64), \
-             not '.' or '..'"
+             starting with a letter or digit"
         );
     }
     Ok(())
@@ -228,7 +274,8 @@ pub fn get_installed_versions() -> Result<Vec<String>> {
         let entry = entry?;
         // `path().is_dir()` follows links: on Linux each version is a link to
         // the system's package, which `file_type()` would report as a symlink.
-        if entry.path().is_dir() {
+        let hidden = entry.file_name().to_string_lossy().starts_with('.');
+        if !hidden && entry.path().is_dir() {
             versions.push(entry.file_name().to_string_lossy().to_string());
         }
     }
@@ -291,25 +338,6 @@ fn detect_platform() -> Result<(String, String)> {
     Ok((os.to_string(), arch.to_string()))
 }
 
-fn normalize_version(version: &str) -> String {
-    // Normalize version strings like "17" to latest minor version (e.g., "17.7")
-    // This ensures compatibility with EnterpriseDB URL patterns and provides
-    // the latest stable release for each major version
-    let parts: Vec<&str> = version.split('.').collect();
-    match parts.len() {
-        1 => {
-            for (major, full) in AVAILABLE_VERSIONS {
-                if *major == parts[0] {
-                    return full.to_string();
-                }
-            }
-            // For unknown versions, default to .0
-            format!("{}.0", version)
-        }
-        _ => version.to_string(),
-    }
-}
-
 /// What `dbctl versions --json` prints: what can be installed, and what is.
 #[derive(Debug, serde::Serialize)]
 pub struct VersionsReport {
@@ -321,7 +349,7 @@ pub fn versions_report() -> Result<VersionsReport> {
     Ok(VersionsReport {
         available: AVAILABLE_VERSIONS
             .iter()
-            .map(|(_major, full)| full.to_string())
+            .map(|r| r.version.to_string())
             .collect(),
         installed: get_installed_versions()?,
     })
@@ -332,7 +360,8 @@ pub fn list_available_versions() -> Result<()> {
 
     println!("Available PostgreSQL versions:\n");
 
-    for (_major, full_version) in AVAILABLE_VERSIONS {
+    for release in AVAILABLE_VERSIONS {
+        let full_version = release.version;
         let is_installed = installed.iter().any(|v| v == full_version);
         if is_installed {
             println!("  {}     {}", full_version, "(installed)".green());
@@ -344,49 +373,70 @@ pub fn list_available_versions() -> Result<()> {
     Ok(())
 }
 
-async fn install_postgres_macos(version: &str, install_dir: &PathBuf, _arch: &str) -> Result<()> {
-    // EDB provides universal binaries for macOS
-    // Normalize version (e.g., "17" -> "17.7") to latest minor version for URL compatibility
-    let normalized_version = normalize_version(version);
+async fn install_postgres_macos(version: &str, install_dir: &Path, _arch: &str) -> Result<()> {
+    let Some(release) = find_release(version) else {
+        let known: Vec<_> = AVAILABLE_VERSIONS.iter().map(|r| r.version).collect();
+        bail!(
+            "dbctl cannot verify PostgreSQL {version}: on macOS it installs only the releases \
+             whose archive hash it pins, which are {} (or just the major version, such as 16)",
+            known.join(", ")
+        );
+    };
 
-    fs::create_dir_all(install_dir)?;
-
-    // Use "universal" for cache key since macOS binaries work on all architectures
-    let os = "macos";
-    let cache_arch = "universal";
-
-    if crate::cache::is_cached(&normalized_version, os, cache_arch)? {
-        println!("✓ Found in cache, extracting...");
-        let cache_path = crate::cache::get_cache_path(&normalized_version, os, cache_arch)?;
-        extract_zip_from_file(&cache_path, install_dir)?;
+    // EDB's macOS archives are universal: one per release for both architectures.
+    let archive = crate::cache::get_cache_path(release.version, "macos", "universal")?;
+    if archive.exists() {
+        println!("✓ Found in cache");
+        if let Err(e) = verify_sha256(&archive, release.macos_sha256) {
+            let _ = fs::remove_file(&archive);
+            return Err(e.context(format!(
+                "the cached archive {} was removed; run the install again to download it",
+                archive.display()
+            )));
+        }
     } else {
         let url = format!(
             "https://get.enterprisedb.com/postgresql/postgresql-{}-1-osx-binaries.zip",
-            normalized_version
+            release.version
         );
         println!("Downloading from: {}", url);
-
-        let data = download_binary(&url).await?;
-        println!("✓ Saving to cache...");
-        let cache_path = crate::cache::save_to_cache(&normalized_version, os, cache_arch, &data)?;
-
-        extract_zip_from_file(&cache_path, install_dir)?;
+        download_verified(&url, &archive, release.macos_sha256).await?;
     }
 
-    // The extracted structure is pgsql/
-    let pgsql_dir = install_dir.join("pgsql");
+    // Unpack into a hidden staging directory and rename it into place last,
+    // so a failure never leaves a version that looks installed.
+    let file_name = install_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let staging =
+        install_dir.with_file_name(format!(".{file_name}.partial-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&staging);
+    let unpacked = unpack_release(&archive, &staging).and_then(|()| {
+        fs::rename(&staging, install_dir)?;
+        Ok(())
+    });
+    if unpacked.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    unpacked?;
+
+    println!("✓ Installation complete");
+    Ok(())
+}
+
+/// Unpack an EDB archive into `dir`, lifting its top-level pgsql/ directory.
+fn unpack_release(archive: &Path, dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    extract_zip_from_file(archive, dir)?;
+    let pgsql_dir = dir.join("pgsql");
     if pgsql_dir.exists() {
-        // Move contents up
         for entry in fs::read_dir(&pgsql_dir)? {
             let entry = entry?;
-            let dest = install_dir.join(entry.file_name());
-            fs::rename(entry.path(), dest)?;
+            fs::rename(entry.path(), dir.join(entry.file_name()))?;
         }
         fs::remove_dir_all(&pgsql_dir)?;
     }
-
-    println!("✓ Installation complete");
-
     Ok(())
 }
 
@@ -431,12 +481,19 @@ fn link_system_postgres(version: &str, install_dir: &Path, system_root: &Path) -
     Ok(())
 }
 
-async fn download_binary(url: &str) -> Result<Vec<u8>> {
+/// Download `url` to `dest`, checking its SHA-256 as it streams. The file
+/// is written beside `dest` and renamed into place only when the hash
+/// matches, so a failed or tampered download is never cached.
+async fn download_verified(url: &str, dest: &Path, sha256: &str) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()?;
-
-    let response = client.get(url).send().await?;
+    let response = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()
+        .with_context(|| format!("downloading {url}"))?;
     let total_size = response.content_length().unwrap_or(0);
 
     let pb = ProgressBar::new(total_size);
@@ -444,20 +501,61 @@ async fn download_binary(url: &str) -> Result<Vec<u8>> {
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
         .progress_chars("#>-"));
 
-    let mut downloaded = 0u64;
-    let mut stream = response.bytes_stream();
-    let mut buffer = Vec::new();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        buffer.extend_from_slice(&chunk);
-        downloaded += chunk.len() as u64;
-        pb.set_position(downloaded);
+    let partial = dest.with_extension("partial");
+    let streamed = async {
+        let mut file = fs::File::create(&partial)?;
+        let mut hasher = Sha256::new();
+        let mut stream = response.bytes_stream();
+        let mut downloaded = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            hasher.update(&chunk);
+            file.write_all(&chunk)?;
+            downloaded += chunk.len() as u64;
+            pb.set_position(downloaded);
+        }
+        file.sync_all()?;
+        let got = to_hex(&hasher.finalize());
+        if got != sha256 {
+            bail!("the archive from {url} has SHA-256 {got}, not the pinned {sha256}");
+        }
+        fs::rename(&partial, dest)?;
+        anyhow::Ok(())
     }
+    .await;
+    pb.finish_and_clear();
+    if streamed.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    streamed?;
+    println!("✓ Downloaded and verified");
+    Ok(())
+}
 
-    pb.finish_with_message("Download complete");
+/// Check a file against a pinned SHA-256.
+fn verify_sha256(path: &Path, sha256: &str) -> Result<()> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let got = to_hex(&hasher.finalize());
+    if got != sha256 {
+        bail!(
+            "{} has SHA-256 {got}, not the pinned {sha256}",
+            path.display()
+        );
+    }
+    Ok(())
+}
 
-    Ok(buffer)
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn extract_zip_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
@@ -1502,54 +1600,18 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_version_major_only() {
-        // Test that major versions map to latest minor versions
-        assert_eq!(normalize_version("18"), "18.4");
-        assert_eq!(normalize_version("17"), "17.10");
-        assert_eq!(normalize_version("16"), "16.14");
-        assert_eq!(normalize_version("15"), "15.18");
-        assert_eq!(normalize_version("14"), "14.23");
-        assert_eq!(normalize_version("13"), "13.23");
-    }
-
-    #[test]
-    fn test_normalize_version_major_minor() {
-        // Test that full versions are passed through unchanged
-        assert_eq!(normalize_version("17.0"), "17.0");
-        assert_eq!(normalize_version("17.5"), "17.5");
-        assert_eq!(normalize_version("16.3"), "16.3");
-        assert_eq!(normalize_version("15.8"), "15.8");
-        assert_eq!(normalize_version("14.12"), "14.12");
-    }
-
-    #[test]
-    fn test_normalize_version_major_minor_patch() {
-        // Test that versions with patch numbers are passed through unchanged
-        assert_eq!(normalize_version("16.3.1"), "16.3.1");
-        assert_eq!(normalize_version("15.8.2"), "15.8.2");
-    }
-
-    #[test]
-    fn test_normalize_version_unknown_major() {
-        // Test that unknown major versions default to .0
-        assert_eq!(normalize_version("19"), "19.0");
-        assert_eq!(normalize_version("20"), "20.0");
-        assert_eq!(normalize_version("99"), "99.0");
-    }
-
-    #[test]
-    fn test_normalize_version_edge_cases() {
-        // Test edge cases
-        assert_eq!(normalize_version("17.7"), "17.7"); // Already latest
-        assert_eq!(normalize_version("16.11"), "16.11"); // Already latest
-        assert_eq!(normalize_version("12"), "12.0"); // EOL version not in mapping
-    }
-
-    #[test]
-    fn test_normalize_version_preserves_custom_versions() {
-        // Test that custom/specific versions are preserved
-        assert_eq!(normalize_version("17.2"), "17.2");
-        assert_eq!(normalize_version("16.5"), "16.5");
-        assert_eq!(normalize_version("15.1"), "15.1");
+    fn a_release_is_found_by_major_or_full_version() {
+        assert_eq!(find_release("16").map(|r| r.version), Some("16.14"));
+        assert_eq!(find_release("16.14").map(|r| r.version), Some("16.14"));
+        assert!(find_release("16.3").is_none());
+        assert!(find_release("99").is_none());
+        for r in AVAILABLE_VERSIONS {
+            assert_eq!(r.macos_sha256.len(), 64, "{}", r.version);
+            assert!(
+                r.macos_sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            );
+        }
     }
 }

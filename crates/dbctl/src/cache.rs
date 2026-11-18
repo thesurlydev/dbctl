@@ -3,8 +3,9 @@
 //! Implements a local cache for PostgreSQL binaries to speed up installations
 //! and provide resilience against upstream download failures.
 //!
-//! Cache locations:
-//! - Local dev: ~/.dbctl/cache/postgres/
+//! Cache location: ~/.dbctl/cache/postgres/. Every archive, cached or
+//! freshly downloaded, is checked against the SHA-256 pinned in
+//! `server::AVAILABLE_VERSIONS` before it is unpacked.
 //!
 //! Only macOS downloads PostgreSQL, so in practice only macOS archives are
 //! cached. On Linux, `dbctl install` links the distribution's packages
@@ -14,7 +15,7 @@
 //! Cache keys: {version}-{os}-{arch}.{ext}, e.g. 17.7-macos-universal.zip
 //! ("universal": the binaries run on both Intel and Apple Silicon).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use std::fs;
 use std::path::PathBuf;
@@ -44,16 +45,10 @@ pub fn handle_action(action: CacheAction) -> Result<()> {
     Ok(())
 }
 
-/// Get the cache directory for PostgreSQL binaries
+/// The cache directory, ~/.dbctl/cache/postgres. It lives under the user's
+/// own home on purpose: a shared directory would let another user plant an
+/// archive (every archive is still checked against its pinned hash).
 pub fn get_cache_dir() -> Result<PathBuf> {
-    // Try /data/cache/postgres first (VPS)
-    let vps_cache = PathBuf::from("/data/cache/postgres");
-    if vps_cache.parent().map(|p| p.exists()).unwrap_or(false) {
-        fs::create_dir_all(&vps_cache)?;
-        return Ok(vps_cache);
-    }
-
-    // Fall back to ~/.dbctl/cache/postgres (local dev)
     let home_cache = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
         .join(".dbctl")
@@ -70,27 +65,11 @@ pub fn cache_key(version: &str, os: &str, arch: &str) -> String {
     format!("{}-{}-{}.{}", version, os, arch, ext)
 }
 
-/// Check if a binary exists in the cache
-pub fn is_cached(version: &str, os: &str, arch: &str) -> Result<bool> {
-    let cache_dir = get_cache_dir()?;
-    let key = cache_key(version, os, arch);
-    let cache_path = cache_dir.join(&key);
-    Ok(cache_path.exists())
-}
-
 /// Get the path to a cached binary (doesn't check if it exists)
 pub fn get_cache_path(version: &str, os: &str, arch: &str) -> Result<PathBuf> {
     let cache_dir = get_cache_dir()?;
     let key = cache_key(version, os, arch);
     Ok(cache_dir.join(key))
-}
-
-/// Save downloaded binary to cache
-pub fn save_to_cache(version: &str, os: &str, arch: &str, data: &[u8]) -> Result<PathBuf> {
-    let cache_path = get_cache_path(version, os, arch)?;
-    fs::write(&cache_path, data)
-        .with_context(|| format!("Failed to write cache file: {}", cache_path.display()))?;
-    Ok(cache_path)
 }
 
 /// Get cache statistics

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
-const PG_VERSION: &str = "16.3";
+const PG_VERSION: &str = "16";
 
 fn dbctl(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_dbctl"))
@@ -123,6 +123,35 @@ fn a_linked_version_is_reported_as_installed() {
     assert_eq!(report["installed"], serde_json::json!(["17", "16"]));
     let listed = ok(&home.0, &["server", "list"]);
     assert!(listed.contains("16"), "{listed}");
+}
+
+/// macOS downloads PostgreSQL, so it installs only releases whose archive
+/// hash dbctl pins. Neither test reaches the network.
+#[cfg(target_os = "macos")]
+#[test]
+fn install_refuses_a_release_it_cannot_verify() {
+    let home = ScratchHome::new("install-unverified");
+    let stderr = fails(&home.0, &["install", "99"]);
+    assert!(stderr.contains("cannot verify"), "{stderr}");
+    assert!(!home.0.join(".dbctl/versions/99").exists());
+    let cache = home.0.join(".dbctl/cache/postgres");
+    let cached = std::fs::read_dir(&cache).map_or(0, |d| d.count());
+    assert_eq!(cached, 0, "nothing may be cached for an unverified release");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_tampered_cached_archive_is_removed_not_installed() {
+    let home = ScratchHome::new("install-tampered");
+    let cache = home.0.join(".dbctl/cache/postgres");
+    std::fs::create_dir_all(&cache).unwrap();
+    let archive = cache.join("16.14-macos-universal.zip");
+    std::fs::write(&archive, b"not the archive EnterpriseDB published").unwrap();
+
+    let stderr = fails(&home.0, &["install", "16"]);
+    assert!(stderr.contains("SHA-256"), "{stderr}");
+    assert!(!archive.exists(), "the bad archive must not be reused");
+    assert!(!home.0.join(".dbctl/versions/16").exists());
 }
 
 #[test]
