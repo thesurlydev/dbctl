@@ -8,6 +8,8 @@ dbctl is a PostgreSQL version and database manager written in Rust. It installs 
 
 The primary audience is local development: smart defaults, auto-selection of clusters when unambiguous, interactive prompts for missing arguments, and colored output. It is also driven by programs: automation runs it over SSH on servers, with no terminal, and parses its `--json` output.
 
+Default branch is `master`; remotes are `origin` (GitHub) and `forgejo`.
+
 ## Repository Layout
 
 ```
@@ -46,16 +48,14 @@ cargo test
 cargo test --test cli -- --ignored
 # or: mise run test-integration
 
-# Everything that must pass before committing
+# Everything that must pass before committing: build, test, clippy -D warnings, fmt --check
+# (`check` is an alias). CI on Forgejo runs this same task.
 mise run gate
 
 # Install the binary to ~/.cargo/bin
 cargo install --path crates/dbctl
 # or: mise run install
 
-# Format and lint (run before considering work complete)
-cargo fmt
-cargo clippy --all-targets -- -D warnings
 ```
 
 The CLI tests run the built binary with `HOME` pointed at a scratch directory, so they never touch your `~/.dbctl/`, and with stdin closed, the way automation runs dbctl: no command may wait on a prompt. Each PostgreSQL test gets its own cluster and port, so they run in parallel. They install PostgreSQL once per run, reusing your local download cache when it has the archive.
@@ -74,21 +74,16 @@ The CLI tests run the built binary with `HOME` pointed at a scratch directory, s
 
 ## Code Style
 
-- Rust edition 2024 (workspace-wide). Do not downgrade.
 - Keep modules focused: server/cluster lifecycle in `server.rs`, database-level operations in `postgres.rs`, connection profiles in `connection.rs`, etc.
 - Use `colored` for user-facing terminal output and `dialoguer` for interactive prompts; use `indicatif` for progress bars on long-running operations (downloads, installs).
 - Serialize state with `serde`/`serde_json` (see `ClusterMetadata`, `Context`, `ConnectionProfile`).
 - Never require root or write outside `~/.dbctl/` (the VPS cache path `/data/cache/postgres/` in `cache.rs` is the one documented exception).
-- No emojis in source, output, or commit messages. No em dashes; use a plain hyphen for ranges.
 
 ## Testing Guidance
 
 - Tests are E2E by design: they invoke the built CLI and verify behavior a real user would see. When fixing a bug, reproduce it through the CLI first, then add or update an integration test covering it.
 - Use the `Cluster` guard in `tests/cli.rs` (it removes its cluster when dropped, even on failure) and give each test its own port. Tests that need PostgreSQL are `#[ignore]`d so `cargo test` stays fast.
 
-## Commit and PR Guidance
+## Docs
 
-- Do not commit changes unless explicitly asked.
-- Do not add yourself as co-author in commit messages.
-- `CHANGELOG.md` (if present) is auto-generated; never edit it manually.
 - README.md and QUICKSTART.md document user-facing behavior; update them when commands, flags, or directory layouts change.
