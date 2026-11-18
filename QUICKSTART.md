@@ -15,17 +15,17 @@ dbctl versions
 Then install a PostgreSQL version:
 
 ```bash
-dbctl install 16.3
+dbctl install 16
 ```
 
 You can install multiple versions side-by-side:
 
 ```bash
-dbctl install 15.4
-dbctl install 17.0
+dbctl install 15
+dbctl install 17
 ```
 
-Downloaded binaries are cached locally, so reinstalling a version you've already downloaded (e.g. after `dbctl remove`) skips the network download entirely.
+Downloaded binaries are cached locally, so reinstalling a version you've already downloaded skips the network download entirely.
 
 ### Create Your First Cluster
 
@@ -38,7 +38,7 @@ dbctl init mydev
 Or specify everything explicitly:
 
 ```bash
-dbctl init mydev --version 16.3 --port 5432 --username postgres
+dbctl init mydev --version 16 --port 5432 --username postgres
 ```
 
 ### Check Status
@@ -90,8 +90,8 @@ dbctl logs mydev -n 200 -f
 Create additional clusters on different ports:
 
 ```bash
-dbctl init production --version 16.3 --port 5433 --username admin
-dbctl init testing --version 15.4 --port 5434 --username postgres
+dbctl init production --version 16 --port 5433 --username admin
+dbctl init testing --version 15 --port 5434 --username postgres
 ```
 
 List all clusters:
@@ -206,8 +206,8 @@ dbctl restore testapp -i prod_backup.sql -c testing
 # Create user (prompts for password)
 dbctl createuser alice
 
-# Create user with password
-dbctl createuser bob -p secretpass
+# Create user with the password on stdin (kept out of the process list)
+printf '%s\n' "$BOB_PASSWORD" | dbctl createuser bob --password-stdin
 
 # Create superuser
 dbctl createuser admin --superuser
@@ -278,10 +278,10 @@ Here's a complete workflow from installation to working with databases:
 
 ```bash
 # 1. Install PostgreSQL
-dbctl install 16.3
+dbctl install 16
 
 # 2. Create and start a cluster
-dbctl init mydev --version 16.3 --port 5432 --username postgres
+dbctl init mydev --version 16 --port 5432 --username postgres
 
 # 3. Create a database
 dbctl createdb myapp
@@ -336,12 +336,12 @@ dbctl rm mydev --force
 
 ```bash
 # Create clusters with different versions
-dbctl init dev16 --version 16.3 --port 5432
-dbctl init dev15 --version 15.4 --port 5433
+dbctl init dev16 --version 16 --port 5432
+dbctl init dev15 --version 15 --port 5433
 
 # Switch between them
 dbctl start dev16
-dbctl createdb myapp    # Created in PostgreSQL 16.3
+dbctl createdb myapp    # Created in PostgreSQL 16
 
 dbctl start dev15
 dbctl createdb myapp    # Created in PostgreSQL 15.4

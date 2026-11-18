@@ -19,7 +19,7 @@ struct Cli {
 enum Commands {
     /// Install PostgreSQL version
     Install {
-        /// PostgreSQL version (e.g., 16.3)
+        /// PostgreSQL version: a major (16) or a pinned release (16.14)
         version: String,
     },
 
@@ -648,7 +648,7 @@ async fn show_overview() -> Result<()> {
     if clusters.is_empty() {
         println!("{}", "No clusters found.".yellow());
         println!("\nGet started:");
-        println!("  {}", "dbctl install 16.3".green());
+        println!("  {}", "dbctl install 16".green());
         println!("  {}", "dbctl init mydev".green());
         return Ok(());
     }
@@ -799,7 +799,7 @@ async fn handle_init(
         if versions.is_empty() {
             bail!(
                 "No PostgreSQL versions installed. Run: {}",
-                "dbctl install 16.3".green()
+                "dbctl install 16".green()
             );
         } else if versions.len() == 1 {
             let v = versions[0].clone();

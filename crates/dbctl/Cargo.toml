@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Install and run PostgreSQL versions and clusters without root, with verified downloads"
+readme = "../../README.md"
+keywords = ["postgresql", "postgres", "database", "cli", "version-manager"]
+categories = ["command-line-utilities", "database"]
 
 [lib]
 name = "dbctl"

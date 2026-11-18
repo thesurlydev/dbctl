@@ -1189,7 +1189,7 @@ fn list_clusters() -> Result<()> {
     if !clusters_dir.exists() {
         println!("No clusters found.");
         println!("\nTo create a cluster:");
-        println!("  dbctl init my_cluster --version 16.3 --port 5432");
+        println!("  dbctl init my_cluster --version 16 --port 5432");
         return Ok(());
     }
 

@@ -49,7 +49,7 @@ cargo test --test cli -- --ignored
 # or: mise run test-integration
 
 # Everything that must pass before committing: build, test, clippy -D warnings, fmt --check
-# (`check` is an alias). CI on Forgejo runs this same task.
+# (`check` is an alias). CI on GitHub and Forgejo runs the same steps.
 mise run gate
 
 # Install the binary to ~/.cargo/bin
@@ -66,7 +66,8 @@ The CLI tests run the built binary with `HOME` pointed at a scratch directory, s
 - Async runtime is tokio (`#[tokio::main]`). Database connections use `tokio-postgres` over the cluster's unix socket, with no TLS.
 - Error handling uses `anyhow` (`Result`, `bail!`) throughout.
 - On macOS, PostgreSQL binaries are downloaded from EnterpriseDB build archives, cached in `~/.dbctl/cache/postgres/` keyed by `{version}-{os}-{arch}`, and installed to `~/.dbctl/versions/<version>/`. On Linux, EnterpriseDB publishes no binaries for current versions, so `install` links `~/.dbctl/versions/<version>` to the distribution's package (`/usr/lib/postgresql/<major>`, from apt.postgresql.org). Clusters live in `~/.dbctl/clusters/<name>/` with a `metadata.json` describing each cluster.
-- `AVAILABLE_VERSIONS` in `crates/dbctl/src/server.rs` is the source of truth for supported PostgreSQL major versions and their latest minor releases.
+- `AVAILABLE_VERSIONS` in `crates/dbctl/src/server.rs` is the source of truth for supported PostgreSQL releases, each with the SHA-256 of its macOS archive. macOS installs only these, and checks every archive (downloaded or cached) against the hash before unpacking. To add or bump a release, download its archive and record `shasum -a 256` of it. The default pgvector release is pinned to a commit in `extension.rs` the same way.
+- Cluster names, versions and git tags are joined onto paths under `~/.dbctl`, so they go through `server::validate_name` (one plain path component); `get_cluster_dir` and `get_version_dir` do it and return a `Result`. Names reach SQL only through `quote_ident`, `quote_literal` or a bound parameter.
 - Cluster management shells out to the installed PostgreSQL binaries (`initdb`, `pg_ctl`, `psql`, `pg_dump`, etc.); extension builds shell out to PGXS (`make` with `PG_CONFIG` pointing at the managed install).
 - Several commands support a `--json` flag for machine-readable output (see the README's Scripting section). Callers parse it and the tests pin the shapes, so treat it as a public interface: changing a shape is a breaking change. Preserve this pattern when adding new list/status-style commands.
 - The CLI favors smart defaults: cluster name arguments are optional when only one cluster exists, and the human-readable commands auto-start a stopped cluster when they access it. JSON reads do not: they report the cluster as it is, failing on a stopped one. Keep this UX when adding commands.
@@ -77,7 +78,7 @@ The CLI tests run the built binary with `HOME` pointed at a scratch directory, s
 - Keep modules focused: server/cluster lifecycle in `server.rs`, database-level operations in `postgres.rs`, connections in `connection.rs`, etc.
 - Use `colored` for user-facing terminal output and `dialoguer` for interactive prompts; use `indicatif` for progress bars on long-running operations (downloads, installs).
 - Serialize state with `serde`/`serde_json` (see `ClusterMetadata`, `Context`).
-- Never require root or write outside `~/.dbctl/` (the VPS cache path `/data/cache/postgres/` in `cache.rs` is the one documented exception).
+- Never require root or write outside `~/.dbctl/`.
 
 ## Testing Guidance
 

@@ -19,6 +19,8 @@ Designed for local development with smart defaults - minimal typing, auto-select
 - Interactive prompts for missing information
 - Colored output for better readability
 - No root access required - all data stored in `~/.dbctl/`
+- Downloads are verified: every PostgreSQL archive is checked against a pinned
+  SHA-256 before it is unpacked
 - Supports macOS and Linux (x86_64 and ARM64). On macOS dbctl downloads
   PostgreSQL; on Linux it uses the distribution's packages
   (`apt-get install postgresql-16` from apt.postgresql.org), since no Linux
@@ -27,9 +29,13 @@ Designed for local development with smart defaults - minimal typing, auto-select
 
 ## Installation
 
+Requires Rust 1.98 or later.
+
 ```bash
-cargo install --path .
+cargo install --git https://github.com/thesurlydev/dbctl dbctl
 ```
+
+Or from a checkout: `cargo install --path crates/dbctl` (`mise run install`).
 
 ## Quick Start
 
@@ -38,7 +44,7 @@ See [QUICKSTART.md](QUICKSTART.md) for a comprehensive guide with examples of al
 Basic workflow:
 
 ```bash
-dbctl install 16.3        # Install PostgreSQL
+dbctl install 16          # Install PostgreSQL 16 (the latest pinned 16.x)
 dbctl init mydev          # Create a cluster (interactive)
 dbctl start               # Start the cluster
 dbctl createdb myapp      # Create a database
@@ -49,8 +55,10 @@ dbctl use myapp           # Start interactive SQL REPL
 
 `dbctl init` takes `--auth trust` (the default) or `--auth password`:
 
-- **trust**: every local connection is trusted, socket and TCP. Convenient on
-  a laptop, where nothing untrusted runs.
+- **trust**: every local connection is trusted. Convenient on a laptop, where
+  nothing untrusted runs, but any user on the machine can connect over
+  127.0.0.1 as the superuser, so use password mode on a shared machine. The
+  unix socket is owner-only (0700) in both modes.
 - **password**: TCP logins need a scram-sha-256 password, and the unix socket
   is owner-only (0700), so only the OS user running PostgreSQL can bypass
   passwords. What servers use: create the superuser without a password, give
@@ -59,7 +67,7 @@ dbctl use myapp           # Start interactive SQL REPL
 
 ```bash
 dbctl init main --version 16 --port 5432 --username postgres --auth password
-dbctl create-user app --password "$APP_PASSWORD" -c main
+printf '%s\n' "$APP_PASSWORD" | dbctl create-user app --password-stdin -c main
 dbctl create-db app --owner app -c main
 ```
 
@@ -133,7 +141,7 @@ All data is stored in `~/.dbctl/`:
 ├── cache/
 │   └── postgres/      # Downloaded binary archives, reused across installs
 ├── versions/
-│   └── 16.3/          # PostgreSQL binaries
+│   └── 16/            # PostgreSQL binaries
 │       ├── bin/
 │       ├── lib/
 │       └── share/
@@ -144,9 +152,19 @@ All data is stored in `~/.dbctl/`:
         └── metadata.json  # Cluster configuration
 ```
 
+## Verified Downloads
+
+On macOS, dbctl installs PostgreSQL from EnterpriseDB's binary archives, and
+only the releases listed in `AVAILABLE_VERSIONS` (`crates/dbctl/src/server.rs`),
+each pinned to the SHA-256 of its archive. Name a release by its major version
+(`dbctl install 16`) or in full (`dbctl install 16.14`); `dbctl versions` lists
+them. A download is hashed as it streams and kept only when it matches, and a
+cached archive is checked again before every install. The pgvector source that
+`dbctl extension install pgvector` builds is pinned to a commit the same way.
+
 ## Binary Cache
 
-`dbctl install` caches downloaded PostgreSQL archives locally, keyed by version, OS, and architecture, so reinstalling a version (e.g. after `dbctl remove`) skips the download.
+`dbctl install` caches downloaded PostgreSQL archives locally, keyed by version, OS, and architecture, so reinstalling a version skips the download.
 
 ```bash
 # Show cache location, file count, and total size
@@ -158,9 +176,18 @@ dbctl cache clear
 
 ## Requirements
 
-- Rust 1.75 or later
+- Rust 1.98 or later to build
 - macOS or Linux (x86_64 or ARM64)
 - macOS: an internet connection for downloading PostgreSQL binaries
 - Linux: PostgreSQL installed from your distribution's packages
 
 No external tools required for runtime - all archive extraction is handled natively in Rust.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability and what dbctl
+does and does not protect against.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

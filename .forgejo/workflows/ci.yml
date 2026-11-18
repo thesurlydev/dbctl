@@ -1,4 +1,4 @@
-# The gate (build, fast tests, clippy, rustfmt) on Forgejo Actions at forgejo.surlylabs.net.
+# The gate (build, fast tests, clippy, rustfmt) on Forgejo Actions.
 #
 # The runner fleet is Linux/amd64 Docker only. This runs the same steps as `mise run gate`. It does
 # not run `mise run test-integration`: those tests install PostgreSQL and build pgvector, so run
