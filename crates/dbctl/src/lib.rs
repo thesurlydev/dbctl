@@ -8,9 +8,7 @@ pub mod postgres;
 pub mod server;
 
 pub use cache::{CacheAction, CacheStats};
-pub use connection::{
-    ConnectionProfile, ConnectionSource, ConnectionStore, SslMode, connect, test_connection,
-};
+pub use connection::{ConnectionSource, connect};
 pub use context::Context;
 pub use extension::ExtensionAction;
 pub use postgres::{

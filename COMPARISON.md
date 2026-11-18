@@ -12,7 +12,7 @@ How dbctl compares with [pgenv](https://github.com/theory/pgenv), a PostgreSQL b
 | Install speed | Fast (archive download + extract, plus local binary cache) | Slow (full source build; needs compiler/deps) |
 | Version switching | N/A - each cluster pins its own version; binaries addressed per install | Central concept: `pgenv use/switch` changes the active version |
 | Data model | Multiple named clusters under `~/.dbctl/clusters/`, each with `metadata.json` | One data directory per built version |
-| Scope | Full workflow: versions, clusters, databases, users, backups/restore, migrations, extensions, remote connections | Build/switch/run versions; lifecycle (start/stop/status) of the active instance |
+| Scope | Full workflow: versions, clusters, databases, users, backups/restore, migrations, extensions | Build/switch/run versions; lifecycle (start/stop/status) of the active instance |
 
 ## Where pgenv is stronger
 
@@ -26,9 +26,8 @@ How dbctl compares with [pgenv](https://github.com/theory/pgenv), a PostgreSQL b
 - **Multi-cluster management.** pgenv assumes one active version/data dir at a time; dbctl manages many isolated named clusters side by side, with auto-selection when only one exists and auto-start of stopped clusters.
 - **Higher-level database operations.** createdb/dropdb, user management, SQL exec, backup/restore, and migrations are built in. pgenv deliberately stops at the server level.
 - **Extensions.** dbctl builds and enables extensions via PGXS (e.g. pgvector) against the managed install.
-- **Remote connections.** Connection profiles with SSL modes, `connect`/`test`, and the ability to point the CLI at non-local servers - pgenv has no equivalent.
 - **UX for local dev.** Interactive prompts (`dialoguer`), colored output, progress bars, `--json` flags, and remembering your last-used cluster in `context.json`.
 
 ## Bottom line
 
-They overlap only at the "install and run multiple PostgreSQL versions without root" layer. pgenv is a **version switcher** aimed at compatibility/build testing (build anything from source, swap the active version). dbctl is a **local development environment manager** - fewer, newer versions, but a much broader workflow around them (clusters, databases, backups, users, extensions, remote connections) with a focus on convenience and speed.
+They overlap only at the "install and run multiple PostgreSQL versions without root" layer. pgenv is a **version switcher** aimed at compatibility/build testing (build anything from source, swap the active version). dbctl is a **local development environment manager** - fewer, newer versions, but a much broader workflow around them (clusters, databases, backups, users, extensions) with a focus on convenience and speed.

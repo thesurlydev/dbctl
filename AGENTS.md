@@ -25,7 +25,7 @@ Default branch is `master`; remotes are `origin` (GitHub) and `forgejo`.
 │           ├── lib.rs      # Library root; re-exports public API
 │           ├── server.rs   # PostgreSQL install/uninstall, cluster lifecycle (start/stop/init/status/logs)
 │           ├── postgres.rs # Database operations (createdb/dropdb/users/SQL exec/backup/restore/migrations)
-│           ├── connection.rs # Remote connection profiles, SSL modes, connect/test
+│           ├── connection.rs # Connects to a cluster over its unix socket
 │           ├── extension.rs # Build/install/enable PostgreSQL extensions via PGXS (e.g. pgvector)
 │           ├── cache.rs    # Local binary cache for downloaded PostgreSQL archives
 │           └── context.rs  # Remembers last-used cluster (~/.dbctl/context.json)
@@ -63,7 +63,7 @@ The CLI tests run the built binary with `HOME` pointed at a scratch directory, s
 ## Architecture and Conventions
 
 - Single crate with both a `lib.rs` (library exposing all logic) and `main.rs` (thin CLI layer). CLI commands in `main.rs` use clap's derive API; subcommand enums like `ServerAction`, `DbAction`, `CacheAction`, `ExtensionAction` live in their respective modules so they can be reused.
-- Async runtime is tokio (`#[tokio::main]`). Database connections use `tokio-postgres` with `rustls` for TLS.
+- Async runtime is tokio (`#[tokio::main]`). Database connections use `tokio-postgres` over the cluster's unix socket, with no TLS.
 - Error handling uses `anyhow` (`Result`, `bail!`) throughout.
 - On macOS, PostgreSQL binaries are downloaded from EnterpriseDB build archives, cached in `~/.dbctl/cache/postgres/` keyed by `{version}-{os}-{arch}`, and installed to `~/.dbctl/versions/<version>/`. On Linux, EnterpriseDB publishes no binaries for current versions, so `install` links `~/.dbctl/versions/<version>` to the distribution's package (`/usr/lib/postgresql/<major>`, from apt.postgresql.org). Clusters live in `~/.dbctl/clusters/<name>/` with a `metadata.json` describing each cluster.
 - `AVAILABLE_VERSIONS` in `crates/dbctl/src/server.rs` is the source of truth for supported PostgreSQL major versions and their latest minor releases.
@@ -74,9 +74,9 @@ The CLI tests run the built binary with `HOME` pointed at a scratch directory, s
 
 ## Code Style
 
-- Keep modules focused: server/cluster lifecycle in `server.rs`, database-level operations in `postgres.rs`, connection profiles in `connection.rs`, etc.
+- Keep modules focused: server/cluster lifecycle in `server.rs`, database-level operations in `postgres.rs`, connections in `connection.rs`, etc.
 - Use `colored` for user-facing terminal output and `dialoguer` for interactive prompts; use `indicatif` for progress bars on long-running operations (downloads, installs).
-- Serialize state with `serde`/`serde_json` (see `ClusterMetadata`, `Context`, `ConnectionProfile`).
+- Serialize state with `serde`/`serde_json` (see `ClusterMetadata`, `Context`).
 - Never require root or write outside `~/.dbctl/` (the VPS cache path `/data/cache/postgres/` in `cache.rs` is the one documented exception).
 
 ## Testing Guidance
