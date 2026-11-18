@@ -346,11 +346,14 @@ pub async fn drop_database_with_source(source: &ConnectionSource, database: &str
     let (client, _handle) = connect(source, Some("postgres")).await?;
 
     // Terminate connections
-    let terminate_query = format!(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}' AND pid <> pg_backend_pid()",
-        database
-    );
-    client.batch_execute(&terminate_query).await.ok();
+    // The name is a bound parameter, never part of the SQL text.
+    client
+        .execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+             WHERE datname = $1 AND pid <> pg_backend_pid()",
+            &[&database],
+        )
+        .await?;
 
     // Drop database
     let query = format!("DROP DATABASE IF EXISTS {}", quote_ident(database));

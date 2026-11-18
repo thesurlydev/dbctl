@@ -418,6 +418,60 @@ fn databases_are_created_idempotently_and_dropped() {
     );
 }
 
+fn role_names(cluster: &str) -> Vec<String> {
+    json(pg_home(), &["users", "--cluster", cluster, "--json"])
+        .as_array()
+        .expect("users array")
+        .iter()
+        .map(|u| u["name"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Names reach SQL only as quoted identifiers or bound parameters: a name
+/// written to break out of its quotes is just an odd name.
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn database_and_extension_names_cannot_inject_sql() {
+    let home = pg_home();
+    let cluster = Cluster::started("it_injection", 25516);
+    let c = cluster.name.as_str();
+
+    // drop-db pasted the name into its terminate query unquoted.
+    let _ = dbctl(
+        home,
+        &[
+            "drop-db",
+            "x'; CREATE ROLE pwned_by_dropdb; SELECT pid FROM pg_stat_activity WHERE '1' = '1",
+            "-c",
+            c,
+            "--force",
+        ],
+    );
+    // extension enable and disable wrapped the name in quotes it did not escape.
+    for action in ["enable", "disable"] {
+        let _ = dbctl(
+            home,
+            &[
+                "extension",
+                action,
+                &format!("hstore\"; CREATE ROLE pwned_by_{action}; --"),
+                "--cluster",
+                c,
+                "--database",
+                "postgres",
+            ],
+        );
+    }
+
+    let roles = role_names(c);
+    for role in ["pwned_by_dropdb", "pwned_by_enable", "pwned_by_disable"] {
+        assert!(
+            !roles.iter().any(|r| r == role),
+            "{role} was created: {roles:?}"
+        );
+    }
+}
+
 #[test]
 #[ignore = "installs PostgreSQL"]
 fn json_reads_do_not_start_a_stopped_cluster() {

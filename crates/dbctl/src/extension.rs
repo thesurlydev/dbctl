@@ -290,7 +290,10 @@ fn install(
 
 fn enable(name: &str, cluster: &str, database: &str) -> Result<()> {
     let sql_name = sql_extension_name(name);
-    let sql = format!("CREATE EXTENSION IF NOT EXISTS \"{}\";", sql_name);
+    let sql = format!(
+        "CREATE EXTENSION IF NOT EXISTS {};",
+        crate::postgres::quote_ident(sql_name)
+    );
     crate::postgres::exec_sql(cluster, database, &sql)
         .with_context(|| format!("failed to enable extension '{}'", sql_name))?;
     println!(
@@ -305,7 +308,10 @@ fn enable(name: &str, cluster: &str, database: &str) -> Result<()> {
 
 fn disable(name: &str, cluster: &str, database: &str) -> Result<()> {
     let sql_name = sql_extension_name(name);
-    let sql = format!("DROP EXTENSION IF EXISTS \"{}\";", sql_name);
+    let sql = format!(
+        "DROP EXTENSION IF EXISTS {};",
+        crate::postgres::quote_ident(sql_name)
+    );
     crate::postgres::exec_sql(cluster, database, &sql)
         .with_context(|| format!("failed to disable extension '{}'", sql_name))?;
     println!(
