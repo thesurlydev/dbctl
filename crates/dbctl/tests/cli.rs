@@ -107,6 +107,24 @@ fn versions_json_reports_available_and_installed() {
     assert_eq!(report["installed"], serde_json::json!([]));
 }
 
+/// On Linux `install` links versions/<v> to the system's package directory,
+/// so a linked version must count as installed like a downloaded one.
+#[cfg(unix)]
+#[test]
+fn a_linked_version_is_reported_as_installed() {
+    let home = ScratchHome::new("versions-linked");
+    let versions = home.0.join(".dbctl/versions");
+    std::fs::create_dir_all(versions.join("17")).unwrap();
+    let system = home.0.join("usr-lib-postgresql-16");
+    std::fs::create_dir_all(system.join("bin")).unwrap();
+    std::os::unix::fs::symlink(&system, versions.join("16")).unwrap();
+
+    let report = json(&home.0, &["versions", "--json"]);
+    assert_eq!(report["installed"], serde_json::json!(["17", "16"]));
+    let listed = ok(&home.0, &["server", "list"]);
+    assert!(listed.contains("16"), "{listed}");
+}
+
 #[test]
 fn list_json_is_an_empty_array_without_clusters() {
     let home = ScratchHome::new("list-empty");

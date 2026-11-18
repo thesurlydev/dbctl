@@ -226,7 +226,9 @@ pub fn get_installed_versions() -> Result<Vec<String>> {
     let mut versions = Vec::new();
     for entry in fs::read_dir(&versions_dir)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
+        // `path().is_dir()` follows links: on Linux each version is a link to
+        // the system's package, which `file_type()` would report as a symlink.
+        if entry.path().is_dir() {
             versions.push(entry.file_name().to_string_lossy().to_string());
         }
     }
@@ -476,33 +478,20 @@ fn extract_zip_from_file(file_path: &std::path::Path, dest_dir: &std::path::Path
 
 fn list_installed() -> Result<()> {
     let versions_dir = get_versions_dir();
+    let mut versions = get_installed_versions()?;
+    versions.sort();
 
-    if !versions_dir.exists() {
+    if versions.is_empty() {
         println!("No PostgreSQL versions installed.");
         println!("\nTo install a version:");
-        println!("  dbctl install 16.3");
+        println!("  dbctl install 16");
         return Ok(());
     }
 
     println!("Installed PostgreSQL versions:\n");
-
-    let mut versions = Vec::new();
-    for entry in fs::read_dir(&versions_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            versions.push(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-
-    versions.sort();
-
-    if versions.is_empty() {
-        println!("  (none)");
-    } else {
-        for version in versions {
-            let path = versions_dir.join(&version);
-            println!("  {} ({})", version, path.display());
-        }
+    for version in versions {
+        let path = versions_dir.join(&version);
+        println!("  {} ({})", version, path.display());
     }
 
     Ok(())
