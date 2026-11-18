@@ -456,6 +456,53 @@ fn role_names(cluster: &str) -> Vec<String> {
         .collect()
 }
 
+/// Trust mode trusts every local connection, so its socket must at least be
+/// owner-only, and init says that TCP is open to every local user.
+#[cfg(unix)]
+#[test]
+#[ignore = "installs PostgreSQL"]
+fn a_trust_cluster_has_an_owner_only_socket_and_init_warns() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = pg_home();
+    let name = "it_trust_socket";
+    let port = 25517;
+    let _ = dbctl(home, &["remove", name, "--force"]);
+    let stdout = ok(
+        home,
+        &[
+            "init",
+            name,
+            "--version",
+            PG_VERSION,
+            "--port",
+            &port.to_string(),
+            "--username",
+            "admin",
+        ],
+    );
+    let cluster = Cluster {
+        name: name.to_string(),
+        port,
+    };
+    assert!(stdout.contains("--auth password"), "{stdout}");
+
+    ok(home, &["start", name]);
+    // The socket sits in the cluster directory, or in /tmp when that path is
+    // too long for a socket, as it is under macOS's per-user TMPDIR.
+    let file = format!(".s.PGSQL.{}", cluster.port);
+    let in_cluster = home.join(".dbctl/clusters").join(name).join(&file);
+    let socket = if in_cluster.exists() {
+        in_cluster
+    } else {
+        Path::new("/tmp").join(&file)
+    };
+    let mode = std::fs::metadata(&socket)
+        .unwrap_or_else(|e| panic!("{}: {e}", socket.display()))
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "socket mode {mode:o} lets other users in");
+}
+
 /// Names reach SQL only as quoted identifiers or bound parameters: a name
 /// written to break out of its quotes is just an odd name.
 #[test]

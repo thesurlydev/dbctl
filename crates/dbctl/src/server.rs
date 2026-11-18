@@ -676,6 +676,13 @@ pub fn init_cluster(
     fs::write(data_dir.join("pg_hba.conf"), pg_hba_conf(auth))?;
 
     println!("✓ Cluster '{}' initialized ({} auth)", name, auth.name());
+    if auth == AuthMode::Trust {
+        println!(
+            "{} trust auth lets any user on this machine connect over TCP as the \
+             superuser. On a shared machine, use --auth password.",
+            "Note:".yellow()
+        );
+    }
     println!("\nConnection details:");
     println!("  Port: {}", port);
     println!("  User: {}", username);
@@ -702,7 +709,8 @@ pub fn init_cluster(
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     /// Every local connection is trusted, socket and TCP alike: convenient on
-    /// a laptop, where nothing untrusted runs.
+    /// a laptop, where nothing untrusted runs. The socket is still owner-only,
+    /// but any local user can log in over 127.0.0.1 as the superuser.
     #[default]
     Trust,
     /// TCP logins need a scram-sha-256 password, and the socket is owner-only
@@ -736,17 +744,26 @@ pub fn pg_hba_conf(auth: AuthMode) -> String {
     )
 }
 
-/// Settings appended to the postgresql.conf initdb writes.
+/// Settings appended to the postgresql.conf initdb writes. The socket is
+/// owner-only in both modes: in trust mode it is a superuser login with no
+/// password, which no other OS user should reach, even under /tmp.
 pub fn conf_additions(port: u16, socket_dir: &std::path::Path, auth: AuthMode) -> String {
     let mut conf = format!(
-        "\n# dbctl\nport = {}\nunix_socket_directories = '{}'\n",
+        "\n# dbctl\nport = {}\nunix_socket_directories = {}\nunix_socket_permissions = 0700\n",
         port,
-        socket_dir.display()
+        conf_string(&socket_dir.to_string_lossy())
     );
     if auth == AuthMode::Password {
-        conf.push_str("unix_socket_permissions = 0700\npassword_encryption = 'scram-sha-256'\n");
+        conf.push_str("password_encryption = 'scram-sha-256'\n");
     }
     conf
+}
+
+/// A quoted postgresql.conf string. The parser reads a doubled quote as a
+/// quote and a backslash as an escape, so both are escaped: a home directory
+/// with a quote in it cannot end the value early.
+fn conf_string(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 /// How to connect, as printed after a start or restart.
@@ -1525,14 +1542,26 @@ mod tests {
     }
 
     #[test]
-    fn password_mode_locks_the_socket_to_its_owner() {
+    fn both_modes_lock_the_socket_to_its_owner() {
         let socket = std::path::Path::new("/data/db/.dbctl/clusters/main");
         let conf = conf_additions(5432, socket, AuthMode::Password);
         assert!(conf.contains("port = 5432"));
         assert!(conf.contains("unix_socket_directories = '/data/db/.dbctl/clusters/main'"));
         assert!(conf.contains("unix_socket_permissions = 0700"));
         assert!(conf.contains("password_encryption = 'scram-sha-256'"));
-        assert!(!conf_additions(5432, socket, AuthMode::Trust).contains("unix_socket_permissions"));
+        let trust = conf_additions(5432, socket, AuthMode::Trust);
+        assert!(trust.contains("unix_socket_permissions = 0700"));
+        assert!(!trust.contains("password_encryption"));
+    }
+
+    #[test]
+    fn a_quote_or_backslash_in_the_socket_path_stays_inside_the_value() {
+        let socket = std::path::Path::new("/home/o'brien/back\\slash");
+        let conf = conf_additions(5432, socket, AuthMode::Trust);
+        assert!(
+            conf.contains(r"unix_socket_directories = '/home/o''brien/back\\slash'"),
+            "{conf}"
+        );
     }
 
     #[test]
