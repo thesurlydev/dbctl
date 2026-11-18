@@ -1,0 +1,51 @@
+# The gate (build, fast tests, clippy, rustfmt) on Forgejo Actions at forgejo.surlylabs.net.
+#
+# The runner fleet is Linux/amd64 Docker only. This runs the same steps as `mise run gate`. It does
+# not run `mise run test-integration`: those tests install PostgreSQL and build pgvector, so run
+# them locally before a release.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ forgejo.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: gate (linux-amd64)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@v7
+      # rustls with aws-lc-rs builds C code, so the image needs a compiler and cmake.
+      - name: Build tools
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config clang cmake
+      - uses: https://github.com/dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98"
+          components: rustfmt,clippy
+      - name: Build
+        run: cargo build --locked
+      - name: Tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Disk left after the build
+        if: always()
+        run: df -h .
