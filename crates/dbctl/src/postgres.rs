@@ -1,5 +1,5 @@
 // src/postgres.rs
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use std::fs;
 use std::io::Write;
@@ -547,6 +547,21 @@ pub fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
 /// pg_dumpall, the input a restore needs to bring an application back with
 /// its login intact. Written to `<output>.tmp` and renamed, so a failed or
 /// interrupted dump never replaces the previous good one.
+/// Create (or truncate) `path` with mode 0600 on Unix.
+fn create_private_file(path: &str) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(path)
+        .with_context(|| format!("creating {path}"))?;
+    // A file left by an earlier run keeps its old mode, so set it explicitly.
+    #[cfg(unix)]
+    fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(())
+}
+
 pub fn dumpall(cluster: &str, output: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
     let pg_dumpall = crate::server::get_version_dir(&metadata.version)?.join("bin/pg_dumpall");
@@ -554,7 +569,10 @@ pub fn dumpall(cluster: &str, output: &str) -> Result<()> {
         bail!("pg_dumpall not found at {}", pg_dumpall.display());
     }
 
+    // The dump holds every role's password hash, so the file is created
+    // owner-only before pg_dumpall writes into it.
     let tmp = format!("{}.tmp", output);
+    create_private_file(&tmp)?;
     let status = Command::new(&pg_dumpall)
         .args(metadata.client_args())
         .arg("--no-password")

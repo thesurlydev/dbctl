@@ -11,10 +11,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Default release tag used when `--git-tag` is not given, per extension.
-fn default_git_tag(name: &str) -> Option<&'static str> {
+/// Default release used when `--git-tag` is not given, per extension: the
+/// tag, and the commit it must resolve to. A tag can be moved, so a clone of
+/// the default is checked against the commit before anything is built.
+fn default_release(name: &str) -> Option<(&'static str, &'static str)> {
     match name {
-        "pgvector" => Some("v0.8.1"),
+        "pgvector" => Some(("v0.8.1", "778dacf20c07caf904557a88705142631818d8cb")),
         _ => None,
     }
 }
@@ -168,10 +170,15 @@ fn install(
             name
         )
     })?;
-    let tag = git_tag
-        .map(String::from)
-        .or_else(|| default_git_tag(name).map(String::from))
-        .ok_or_else(|| anyhow::anyhow!("No pinned release for '{}'; pass --git-tag", name))?;
+    let (tag, pinned_commit) = match git_tag {
+        Some(tag) => (tag.to_string(), None),
+        None => default_release(name)
+            .map(|(tag, commit)| (tag.to_string(), Some(commit)))
+            .ok_or_else(|| anyhow::anyhow!("No pinned release for '{}'; pass --git-tag", name))?,
+    };
+    // The tag names a directory under the cache and is passed to git, so it
+    // must be one plain component that cannot read as an option.
+    crate::server::validate_name("git tag", &tag)?;
 
     let metadata = crate::server::load_cluster_metadata(cluster)?;
     let version_dir = crate::server::get_version_dir(&metadata.version)?;
@@ -227,7 +234,7 @@ fn install(
             }
             dir.to_path_buf()
         }
-        None => clone_source(name, url, &tag)?,
+        None => clone_source(name, url, &tag, pinned_commit)?,
     };
 
     println!(
@@ -517,8 +524,14 @@ fn check_build_tools() -> Result<()> {
     Ok(())
 }
 
-/// Clone the extension source at a pinned ref into the dbctl cache.
-fn clone_source(name: &str, url: &str, git_ref: &str) -> Result<PathBuf> {
+/// Clone the extension source at a ref into the dbctl cache. With a pinned
+/// commit, the checkout (new or cached) must be exactly that commit.
+fn clone_source(
+    name: &str,
+    url: &str,
+    git_ref: &str,
+    pinned_commit: Option<&str>,
+) -> Result<PathBuf> {
     let cache_dir = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
         .join(".dbctl")
@@ -529,6 +542,7 @@ fn clone_source(name: &str, url: &str, git_ref: &str) -> Result<PathBuf> {
 
     if dest.exists() {
         println!("Using cached source at {}", dest.display());
+        check_commit(&dest, pinned_commit)?;
         return Ok(dest);
     }
 
@@ -555,7 +569,31 @@ fn clone_source(name: &str, url: &str, git_ref: &str) -> Result<PathBuf> {
             bail!("git checkout of {} failed", git_ref);
         }
     }
+    if let Err(e) = check_commit(&dest, pinned_commit) {
+        let _ = fs::remove_dir_all(&dest);
+        return Err(e);
+    }
     Ok(dest)
+}
+
+/// Fail unless the checkout at `dir` is the pinned commit.
+fn check_commit(dir: &std::path::Path, pinned_commit: Option<&str>) -> Result<()> {
+    let Some(pinned) = pinned_commit else {
+        return Ok(());
+    };
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()?;
+    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || head != pinned {
+        bail!(
+            "the source at {} is commit {head}, not the pinned {pinned}; remove it and \
+             install again",
+            dir.display()
+        );
+    }
+    Ok(())
 }
 
 fn run(cmd: &mut Command, stage: &str) -> Result<()> {

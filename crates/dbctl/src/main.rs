@@ -236,7 +236,9 @@ enum Commands {
         /// Username
         username: String,
 
-        /// Password (will prompt if not provided)
+        /// Password (will prompt if not provided). Visible to every local user
+        /// in the process list and kept in shell history: prefer
+        /// --password-stdin or the prompt
         #[arg(long, short = 'p')]
         password: Option<String>,
 

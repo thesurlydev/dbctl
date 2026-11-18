@@ -194,6 +194,24 @@ fn names_that_leave_the_dbctl_directory_are_rejected() {
             "25591",
         ],
         vec!["install", "../../victim"],
+        // The tag names a directory under the cache and is passed to git.
+        vec![
+            "extension",
+            "install",
+            "pgvector",
+            "-c",
+            "x",
+            "--git-tag",
+            "../../../victim",
+        ],
+        vec![
+            "extension",
+            "install",
+            "pgvector",
+            "-c",
+            "x",
+            "--git-tag=--upload-pack=touch",
+        ],
     ] {
         let stderr = fails(&home.0, &args);
         assert!(
@@ -211,6 +229,26 @@ fn names_that_leave_the_dbctl_directory_are_rejected() {
         "an absolute name escaped ~/.dbctl"
     );
     assert!(!home.0.join("escaped").exists());
+}
+
+#[test]
+fn following_logs_before_any_exist_fails_instead_of_panicking() {
+    let home = ScratchHome::new("logs-follow-empty");
+    let cluster = home.0.join(".dbctl/clusters/quiet");
+    std::fs::create_dir_all(cluster.join("logs")).unwrap();
+    let metadata = serde_json::json!({
+        "version": "16",
+        "port": 25592,
+        "username": "admin",
+        "data_dir": cluster.join("data"),
+        "logs_dir": cluster.join("logs"),
+    });
+    std::fs::write(cluster.join("metadata.json"), metadata.to_string()).unwrap();
+
+    let out = dbctl(&home.0, &["logs", "quiet", "--follow"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("no log file"), "{stderr}");
 }
 
 #[test]
@@ -1009,6 +1047,13 @@ fn dumpall_captures_roles_and_data_atomically() {
     );
     assert!(sql.contains("dumped_row"), "data missing");
     assert!(!home.join("it_dumpall.sql.tmp").exists());
+    // The dump holds every role's password hash, so only its owner may read it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&dump).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "dump mode {mode:o} is readable by others");
+    }
 
     ok(home, &["stop", c]);
     assert!(fails(home, &["dumpall", "-o", dump_path, "-c", c]).contains("not running"));

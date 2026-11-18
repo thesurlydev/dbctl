@@ -1330,7 +1330,13 @@ fn show_logs(name: &str, lines: usize, follow: bool) -> Result<()> {
             .collect();
 
         log_files.sort_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
-        let log_file = log_files.last().unwrap().path();
+        let Some(log_file) = log_files.last().map(|e| e.path()) else {
+            bail!(
+                "no log file for cluster '{}' yet in {}; start it first",
+                name,
+                log_dir.display()
+            );
+        };
 
         let status = Command::new("tail")
             .arg("-f")
