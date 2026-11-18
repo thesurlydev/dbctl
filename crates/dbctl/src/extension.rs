@@ -174,7 +174,7 @@ fn install(
         .ok_or_else(|| anyhow::anyhow!("No pinned release for '{}'; pass --git-tag", name))?;
 
     let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let pg_config = version_dir.join("bin/pg_config");
     if !pg_config.exists() {
         bail!(
@@ -342,7 +342,7 @@ async fn list_created(cluster: &str, database: &str, json: bool) -> Result<()> {
 
 fn list(cluster: &str, json: bool) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let pg_config = version_dir.join("bin/pg_config");
     let share_dir = pg_config_out(&pg_config, "--sharedir")?;
     let ext_dir = PathBuf::from(&share_dir).join("extension");
@@ -379,7 +379,7 @@ fn list(cluster: &str, json: bool) -> Result<()> {
 
 fn uninstall(name: &str, cluster: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let pg_config = version_dir.join("bin/pg_config");
     let share_dir = pg_config_out(&pg_config, "--sharedir")?;
     let lib_dir = pg_config_out(&pg_config, "--pkglibdir")?;

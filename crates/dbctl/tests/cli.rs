@@ -121,6 +121,52 @@ fn json_reads_name_their_cluster() {
 }
 
 #[test]
+fn names_that_leave_the_dbctl_directory_are_rejected() {
+    let home = ScratchHome::new("traversal");
+    let dbctl_dir = home.0.join(".dbctl");
+    std::fs::create_dir_all(dbctl_dir.join("clusters")).unwrap();
+    std::fs::create_dir_all(dbctl_dir.join("versions")).unwrap();
+    // Directories a path-shaped name would reach from clusters/ or versions/.
+    let victim = home.0.join("victim");
+    std::fs::create_dir_all(victim.join("keep")).unwrap();
+    let absolute = home.0.join("absolute");
+    std::fs::create_dir_all(absolute.join("keep")).unwrap();
+    let absolute_str = absolute.to_str().unwrap();
+
+    for args in [
+        vec!["rm", "-f", "../../victim"],
+        vec!["rm", "-f", absolute_str],
+        vec!["server", "uninstall", "--version", "../../victim"],
+        vec!["server", "uninstall", "--version", absolute_str],
+        vec![
+            "init",
+            "../../escaped",
+            "--version",
+            "16",
+            "--port",
+            "25591",
+        ],
+        vec!["install", "../../victim"],
+    ] {
+        let stderr = fails(&home.0, &args);
+        assert!(
+            stderr.contains("invalid"),
+            "dbctl {}: {stderr}",
+            args.join(" ")
+        );
+    }
+    assert!(
+        victim.join("keep").is_dir(),
+        "a cluster name escaped ~/.dbctl"
+    );
+    assert!(
+        absolute.join("keep").is_dir(),
+        "an absolute name escaped ~/.dbctl"
+    );
+    assert!(!home.0.join("escaped").exists());
+}
+
+#[test]
 fn starting_an_unknown_cluster_fails() {
     let home = ScratchHome::new("start-unknown");
     assert!(fails(&home.0, &["start", "nope"]).contains("does not exist"));

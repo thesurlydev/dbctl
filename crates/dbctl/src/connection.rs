@@ -156,7 +156,7 @@ impl ConnectionSource {
     pub fn binaries_dir(&self) -> Option<PathBuf> {
         match self {
             ConnectionSource::Cluster { metadata, .. } => {
-                Some(crate::server::get_version_dir(&metadata.version))
+                crate::server::get_version_dir(&metadata.version).ok()
             }
             ConnectionSource::Remote(_) => None,
         }

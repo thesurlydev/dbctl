@@ -428,7 +428,7 @@ fn shell(cluster: &str, database: Option<&str>) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
     let dbname = database.unwrap_or("postgres");
 
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());
@@ -450,7 +450,7 @@ fn shell(cluster: &str, database: Option<&str>) -> Result<()> {
 pub fn exec_sql(cluster: &str, database: &str, sql: &str) -> Result<String> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());
@@ -475,7 +475,7 @@ pub fn exec_sql(cluster: &str, database: &str, sql: &str) -> Result<String> {
 fn exec(cluster: &str, database: &str, file: Option<&str>, sql: Option<&str>) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());
@@ -514,7 +514,7 @@ fn exec(cluster: &str, database: &str, file: Option<&str>, sql: Option<&str>) ->
 pub fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
 
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let pg_dump_path = version_dir.join("bin/pg_dump");
     if !pg_dump_path.exists() {
         bail!("pg_dump not found at {}", pg_dump_path.display());
@@ -546,7 +546,7 @@ pub fn backup(cluster: &str, database: &str, output: &str) -> Result<()> {
 /// interrupted dump never replaces the previous good one.
 pub fn dumpall(cluster: &str, output: &str) -> Result<()> {
     let metadata = crate::server::load_cluster_metadata(cluster)?;
-    let pg_dumpall = crate::server::get_version_dir(&metadata.version).join("bin/pg_dumpall");
+    let pg_dumpall = crate::server::get_version_dir(&metadata.version)?.join("bin/pg_dumpall");
     if !pg_dumpall.exists() {
         bail!("pg_dumpall not found at {}", pg_dumpall.display());
     }
@@ -574,7 +574,7 @@ pub fn restore(cluster: &str, database: &str, input: &str) -> Result<()> {
         bail!("Input file not found: {}", input);
     }
 
-    let version_dir = crate::server::get_version_dir(&metadata.version);
+    let version_dir = crate::server::get_version_dir(&metadata.version)?;
     let psql_path = version_dir.join("bin/psql");
     if !psql_path.exists() {
         bail!("psql not found at {}", psql_path.display());

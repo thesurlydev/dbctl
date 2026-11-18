@@ -191,8 +191,29 @@ fn get_clusters_dir() -> PathBuf {
     get_base_dir().join("clusters")
 }
 
-pub fn get_version_dir(version: &str) -> PathBuf {
-    get_versions_dir().join(version)
+/// A cluster name or version must be one plain path component, because it is
+/// joined onto ~/.dbctl and the result is created, read and removed: `..`, a
+/// slash or an absolute path would reach directories outside it.
+pub fn validate_name(kind: &str, name: &str) -> Result<()> {
+    let plain = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !plain {
+        bail!(
+            "invalid {kind} '{name}': use letters, digits, '.', '_' and '-' (at most 64), \
+             not '.' or '..'"
+        );
+    }
+    Ok(())
+}
+
+pub fn get_version_dir(version: &str) -> Result<PathBuf> {
+    validate_name("version", version)?;
+    Ok(get_versions_dir().join(version))
 }
 
 pub fn get_installed_versions() -> Result<Vec<String>> {
@@ -216,12 +237,13 @@ pub fn get_installed_versions() -> Result<Vec<String>> {
     Ok(versions)
 }
 
-pub fn get_cluster_dir(name: &str) -> PathBuf {
-    get_clusters_dir().join(name)
+pub fn get_cluster_dir(name: &str) -> Result<PathBuf> {
+    validate_name("cluster name", name)?;
+    Ok(get_clusters_dir().join(name))
 }
 
 pub async fn install_postgres(version: &str) -> Result<()> {
-    let version_dir = get_version_dir(version);
+    let version_dir = get_version_dir(version)?;
 
     if version_dir.exists() {
         println!("PostgreSQL {} is already installed", version);
@@ -493,7 +515,9 @@ pub fn init_cluster(
     username: &str,
     auth: AuthMode,
 ) -> Result<()> {
-    let version_dir = get_version_dir(version);
+    // Check the name before anything else, so a bad one is reported as such.
+    let cluster_dir = get_cluster_dir(name)?;
+    let version_dir = get_version_dir(version)?;
 
     if !version_dir.exists() {
         bail!(
@@ -502,8 +526,6 @@ pub fn init_cluster(
             version
         );
     }
-
-    let cluster_dir = get_cluster_dir(name);
 
     if cluster_dir.exists() {
         bail!("Cluster '{}' already exists", name);
@@ -730,7 +752,7 @@ fn conn_value(value: &str) -> String {
 }
 
 pub fn load_cluster_metadata(name: &str) -> Result<ClusterMetadata> {
-    let cluster_dir = get_cluster_dir(name);
+    let cluster_dir = get_cluster_dir(name)?;
     let metadata_path = cluster_dir.join("metadata.json");
 
     if !metadata_path.exists() {
@@ -803,7 +825,7 @@ pub fn is_cluster_running(name: &str) -> Result<bool> {
 }
 
 fn pg_ctl_reports_running(metadata: &ClusterMetadata) -> Result<bool> {
-    let version_dir = get_version_dir(&metadata.version);
+    let version_dir = get_version_dir(&metadata.version)?;
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     let output = Command::new(&pg_ctl_path)
@@ -878,7 +900,7 @@ pub fn start_cluster(name: &str) -> Result<()> {
         println!("Cluster '{}' is already running", name);
         return Ok(());
     }
-    let version_dir = get_version_dir(&metadata.version);
+    let version_dir = get_version_dir(&metadata.version)?;
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     let logfile = metadata.logs_dir.join("postgresql.log");
@@ -928,7 +950,7 @@ pub fn run_cluster(name: &str) -> Result<()> {
             name
         );
     }
-    let postgres = get_version_dir(&metadata.version)
+    let postgres = get_version_dir(&metadata.version)?
         .join("bin")
         .join("postgres");
     fs::create_dir_all(&metadata.logs_dir)?;
@@ -950,7 +972,7 @@ pub fn run_cluster(name: &str) -> Result<()> {
 
 pub fn stop_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
-    let version_dir = get_version_dir(&metadata.version);
+    let version_dir = get_version_dir(&metadata.version)?;
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     println!("Stopping cluster '{}'...", name);
@@ -976,7 +998,7 @@ pub fn stop_cluster(name: &str) -> Result<()> {
 
 pub fn restart_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
-    let version_dir = get_version_dir(&metadata.version);
+    let version_dir = get_version_dir(&metadata.version)?;
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     let logfile = metadata.logs_dir.join("postgresql.log");
@@ -1010,7 +1032,7 @@ pub fn restart_cluster(name: &str) -> Result<()> {
 
 pub fn reload_cluster(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
-    let version_dir = get_version_dir(&metadata.version);
+    let version_dir = get_version_dir(&metadata.version)?;
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     println!("Reloading configuration for cluster '{}'...", name);
@@ -1030,7 +1052,7 @@ pub fn reload_cluster(name: &str) -> Result<()> {
 
 async fn show_status(name: &str) -> Result<()> {
     let metadata = load_cluster_metadata(name)?;
-    let version_dir = get_version_dir(&metadata.version);
+    let version_dir = get_version_dir(&metadata.version)?;
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     println!("Cluster: {}", name);
@@ -1095,7 +1117,7 @@ fn list_clusters() -> Result<()> {
 }
 
 pub fn remove_cluster(name: &str) -> Result<()> {
-    let cluster_dir = get_cluster_dir(name);
+    let cluster_dir = get_cluster_dir(name)?;
 
     if !cluster_dir.exists() {
         bail!("Cluster '{}' does not exist", name);
@@ -1113,7 +1135,7 @@ pub fn remove_cluster(name: &str) -> Result<()> {
 }
 
 fn uninstall_postgres(version: &str) -> Result<()> {
-    let version_dir = get_version_dir(version);
+    let version_dir = get_version_dir(version)?;
 
     if !version_dir.exists() {
         println!("PostgreSQL {} is not installed", version);
