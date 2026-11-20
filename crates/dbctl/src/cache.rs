@@ -29,7 +29,7 @@ pub enum CacheAction {
     Clear,
 }
 
-pub fn handle_action(action: CacheAction) -> Result<()> {
+pub fn handle_action(action: &CacheAction) -> Result<()> {
     match action {
         CacheAction::Stats => {
             let stats = cache_stats()?;

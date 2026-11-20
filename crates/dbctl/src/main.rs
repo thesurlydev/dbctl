@@ -327,7 +327,7 @@ async fn main() -> Result<()> {
             server::list_available_versions()?;
         }
         Some(Commands::Cache { action }) => {
-            cache::handle_action(action)?;
+            cache::handle_action(&action)?;
         }
         Some(Commands::Init {
             name,
@@ -344,7 +344,7 @@ async fn main() -> Result<()> {
         Some(Commands::Start { name }) => {
             let cluster = resolve_cluster(name)?;
             server::start_cluster(&cluster)?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Stop { name }) => {
             let cluster = resolve_cluster(name)?;
@@ -356,7 +356,7 @@ async fn main() -> Result<()> {
                 name: cluster.clone(),
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Reload { name }) => {
             let cluster = resolve_cluster(name)?;
@@ -408,7 +408,7 @@ async fn main() -> Result<()> {
             let cluster = resolve_cluster(cluster)?;
             server::ensure_cluster_running(&cluster)?;
             postgres::create_database(&cluster, &name, owner.as_deref()).await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::DropDb {
             name,
@@ -425,7 +425,7 @@ async fn main() -> Result<()> {
                 database: name,
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Databases {
             cluster: Some(cluster_name),
@@ -452,7 +452,7 @@ async fn main() -> Result<()> {
                 database,
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Exec {
             sql,
@@ -469,7 +469,7 @@ async fn main() -> Result<()> {
                 sql,
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Backup {
             database,
@@ -484,7 +484,7 @@ async fn main() -> Result<()> {
                 output,
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Restore {
             database,
@@ -499,7 +499,7 @@ async fn main() -> Result<()> {
                 input,
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::CreateUser {
             username,
@@ -526,7 +526,7 @@ async fn main() -> Result<()> {
                 },
             })
             .await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Users {
             cluster,
@@ -561,7 +561,7 @@ async fn main() -> Result<()> {
             let cluster = resolve_cluster(cluster)?;
             server::ensure_cluster_running(&cluster)?;
             postgres::run_repl(&cluster, &database).await?;
-            save_context(&cluster)?;
+            save_context(&cluster);
         }
         Some(Commands::Server { action }) => {
             server::handle_action(action).await?;
@@ -615,7 +615,7 @@ fn resolve_cluster(name: Option<String>) -> Result<String> {
 
 /// Remember `cluster` as the default for later commands. Only a convenience:
 /// a failure is reported, but never fails a command that already succeeded.
-fn save_context(cluster: &str) -> Result<()> {
+fn save_context(cluster: &str) {
     let saved =
         Context::load().and_then(|mut context| context.set_last_cluster(cluster.to_string()));
     if let Err(e) = saved {
@@ -624,7 +624,6 @@ fn save_context(cluster: &str) -> Result<()> {
             cluster, e
         );
     }
-    Ok(())
 }
 
 fn format_cluster_list(clusters: &[(String, server::ClusterMetadata)]) -> String {
