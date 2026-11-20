@@ -5,6 +5,7 @@ use colored::Colorize;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -169,13 +170,6 @@ pub enum ServerAction {
         #[arg(long, short = 'f')]
         follow: bool,
     },
-}
-
-/// Borrow a path as UTF-8 for passing to external tools, with a clear error
-/// instead of a panic when it is not valid UTF-8.
-fn path_str(path: &Path) -> Result<&str> {
-    path.to_str()
-        .with_context(|| format!("path is not valid UTF-8: {}", path.display()))
 }
 
 pub async fn handle_action(action: ServerAction) -> Result<()> {
@@ -640,12 +634,12 @@ pub fn init_cluster(
 
     let status = Command::new(&initdb_path)
         .args([
-            "-D",
-            path_str(&data_dir)?,
-            "-U",
-            username,
-            "--encoding=UTF8",
-            "--locale=C",
+            OsStr::new("-D"),
+            data_dir.as_os_str(),
+            OsStr::new("-U"),
+            OsStr::new(username),
+            OsStr::new("--encoding=UTF8"),
+            OsStr::new("--locale=C"),
         ])
         .status()?;
 
@@ -940,7 +934,11 @@ fn pg_ctl_reports_running(metadata: &ClusterMetadata) -> Result<bool> {
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     let output = Command::new(&pg_ctl_path)
-        .args(["-D", path_str(&metadata.data_dir)?, "status"])
+        .args([
+            OsStr::new("-D"),
+            metadata.data_dir.as_os_str(),
+            OsStr::new("status"),
+        ])
         .output()?;
 
     Ok(output.status.success())
@@ -1023,11 +1021,11 @@ pub fn start_cluster(name: &str) -> Result<()> {
 
     let status = Command::new(&pg_ctl_path)
         .args([
-            "-D",
-            path_str(&metadata.data_dir)?,
-            "-l",
-            path_str(&logfile)?,
-            "start",
+            OsStr::new("-D"),
+            metadata.data_dir.as_os_str(),
+            OsStr::new("-l"),
+            logfile.as_os_str(),
+            OsStr::new("start"),
         ])
         .status()?;
 
@@ -1089,7 +1087,13 @@ pub fn stop_cluster(name: &str) -> Result<()> {
     println!("Stopping cluster '{}'...", name);
 
     let status = Command::new(&pg_ctl_path)
-        .args(["-D", path_str(&metadata.data_dir)?, "stop", "-m", "fast"])
+        .args([
+            OsStr::new("-D"),
+            metadata.data_dir.as_os_str(),
+            OsStr::new("stop"),
+            OsStr::new("-m"),
+            OsStr::new("fast"),
+        ])
         .status()?;
 
     if !status.success() {
@@ -1115,13 +1119,13 @@ pub fn restart_cluster(name: &str) -> Result<()> {
 
     let status = Command::new(&pg_ctl_path)
         .args([
-            "-D",
-            path_str(&metadata.data_dir)?,
-            "-l",
-            path_str(&logfile)?,
-            "restart",
-            "-m",
-            "fast",
+            OsStr::new("-D"),
+            metadata.data_dir.as_os_str(),
+            OsStr::new("-l"),
+            logfile.as_os_str(),
+            OsStr::new("restart"),
+            OsStr::new("-m"),
+            OsStr::new("fast"),
         ])
         .status()?;
 
@@ -1143,7 +1147,11 @@ pub fn reload_cluster(name: &str) -> Result<()> {
     println!("Reloading configuration for cluster '{}'...", name);
 
     let status = Command::new(&pg_ctl_path)
-        .args(["-D", path_str(&metadata.data_dir)?, "reload"])
+        .args([
+            OsStr::new("-D"),
+            metadata.data_dir.as_os_str(),
+            OsStr::new("reload"),
+        ])
         .status()?;
 
     if !status.success() {
@@ -1167,7 +1175,11 @@ async fn show_status(name: &str) -> Result<()> {
     println!("\nStatus:");
 
     let output = Command::new(&pg_ctl_path)
-        .args(["-D", path_str(&metadata.data_dir)?, "status"])
+        .args([
+            OsStr::new("-D"),
+            metadata.data_dir.as_os_str(),
+            OsStr::new("status"),
+        ])
         .output()?;
 
     print!("{}", String::from_utf8_lossy(&output.stdout));
