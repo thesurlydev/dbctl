@@ -1,0 +1,5 @@
+# unwrap() in #[test] functions and #[cfg(test)] modules is fine. Test-support code outside those
+# (helpers under tests/, a `testing` feature module) takes a file- or module-level
+# #![expect(clippy::unwrap_used, reason = "test support")].
+allow-unwrap-in-tests = true
+allow-dbg-in-tests = true
