@@ -171,6 +171,13 @@ pub enum ServerAction {
     },
 }
 
+/// Borrow a path as UTF-8 for passing to external tools, with a clear error
+/// instead of a panic when it is not valid UTF-8.
+fn path_str(path: &Path) -> Result<&str> {
+    path.to_str()
+        .with_context(|| format!("path is not valid UTF-8: {}", path.display()))
+}
+
 pub async fn handle_action(action: ServerAction) -> Result<()> {
     match action {
         ServerAction::Install { version } => {
@@ -634,7 +641,7 @@ pub fn init_cluster(
     let status = Command::new(&initdb_path)
         .args([
             "-D",
-            data_dir.to_str().unwrap(),
+            path_str(&data_dir)?,
             "-U",
             username,
             "--encoding=UTF8",
@@ -653,7 +660,7 @@ pub fn init_cluster(
         port,
         username: username.to_string(),
         data_dir: data_dir.clone(),
-        logs_dir: logs_dir.clone(),
+        logs_dir,
         auth,
     };
 
@@ -933,7 +940,7 @@ fn pg_ctl_reports_running(metadata: &ClusterMetadata) -> Result<bool> {
     let pg_ctl_path = version_dir.join("bin").join("pg_ctl");
 
     let output = Command::new(&pg_ctl_path)
-        .args(["-D", metadata.data_dir.to_str().unwrap(), "status"])
+        .args(["-D", path_str(&metadata.data_dir)?, "status"])
         .output()?;
 
     Ok(output.status.success())
@@ -1017,9 +1024,9 @@ pub fn start_cluster(name: &str) -> Result<()> {
     let status = Command::new(&pg_ctl_path)
         .args([
             "-D",
-            metadata.data_dir.to_str().unwrap(),
+            path_str(&metadata.data_dir)?,
             "-l",
-            logfile.to_str().unwrap(),
+            path_str(&logfile)?,
             "start",
         ])
         .status()?;
@@ -1082,13 +1089,7 @@ pub fn stop_cluster(name: &str) -> Result<()> {
     println!("Stopping cluster '{}'...", name);
 
     let status = Command::new(&pg_ctl_path)
-        .args([
-            "-D",
-            metadata.data_dir.to_str().unwrap(),
-            "stop",
-            "-m",
-            "fast",
-        ])
+        .args(["-D", path_str(&metadata.data_dir)?, "stop", "-m", "fast"])
         .status()?;
 
     if !status.success() {
@@ -1115,9 +1116,9 @@ pub fn restart_cluster(name: &str) -> Result<()> {
     let status = Command::new(&pg_ctl_path)
         .args([
             "-D",
-            metadata.data_dir.to_str().unwrap(),
+            path_str(&metadata.data_dir)?,
             "-l",
-            logfile.to_str().unwrap(),
+            path_str(&logfile)?,
             "restart",
             "-m",
             "fast",
@@ -1142,7 +1143,7 @@ pub fn reload_cluster(name: &str) -> Result<()> {
     println!("Reloading configuration for cluster '{}'...", name);
 
     let status = Command::new(&pg_ctl_path)
-        .args(["-D", metadata.data_dir.to_str().unwrap(), "reload"])
+        .args(["-D", path_str(&metadata.data_dir)?, "reload"])
         .status()?;
 
     if !status.success() {
@@ -1166,7 +1167,7 @@ async fn show_status(name: &str) -> Result<()> {
     println!("\nStatus:");
 
     let output = Command::new(&pg_ctl_path)
-        .args(["-D", metadata.data_dir.to_str().unwrap(), "status"])
+        .args(["-D", path_str(&metadata.data_dir)?, "status"])
         .output()?;
 
     print!("{}", String::from_utf8_lossy(&output.stdout));
@@ -1294,12 +1295,11 @@ pub fn get_logs(name: &str, lines: usize) -> Result<String> {
         })
         .collect();
 
-    if log_files.is_empty() {
-        return Ok(format!("No log files found for cluster '{}'", name));
-    }
-
     log_files.sort_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
-    let log_file = log_files.last().unwrap().path();
+    let Some(newest) = log_files.last() else {
+        return Ok(format!("No log files found for cluster '{}'", name));
+    };
+    let log_file = newest.path();
 
     // Read last N lines
     let content = fs::read_to_string(&log_file)?;
